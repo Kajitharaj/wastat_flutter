@@ -27,8 +27,7 @@ class TrackerService extends ChangeNotifier {
   BridgeService? _bridge;
   StreamSubscription<PresenceEvent>? _presenceSub;
 
-  final FlutterLocalNotificationsPlugin _notifications =
-      FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
 
   List<TrackedContact> get contacts => List.unmodifiable(_contacts);
   bool get isRunning => _isRunning;
@@ -51,28 +50,50 @@ class TrackerService extends ChangeNotifier {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iOS = DarwinInitializationSettings();
     const settings = InitializationSettings(android: android, iOS: iOS);
-    await _notifications.initialize(settings);
+    await _notifications.initialize(settings: settings);
   }
 
   // ── Bridge attachment ────────────────────────────────────
-  // Called once BridgeService is configured and connected.
   void attachBridge(BridgeService bridge) {
     _presenceSub?.cancel();
+    _bridge?.removeListener(_onBridgeStateChanged);
     _bridge = bridge;
 
-    // Listen to all incoming presence events
-    _presenceSub = bridge.presenceStream.listen((event) {
-      _handlePresenceFromBridge(event);
-    });
+    // Listen to real-time presence events
+    _presenceSub = bridge.presenceStream.listen(_handlePresenceFromBridge);
 
-    // Subscribe all tracked contacts to bridge
-    if (_isRunning) _subscribeAllToBridge();
+    // Listen for WhatsApp auth state changes (QR scan, logout)
+    bridge.addListener(_onBridgeStateChanged);
+
+    // If WhatsApp is already authenticated right now, start immediately
+    if (bridge.waState == WhatsAppState.connected) {
+      _isRunning = true;
+      _subscribeAllToBridge();
+      notifyListeners();
+    }
+  }
+
+  // Called whenever BridgeService notifies (waState changed, etc.)
+  void _onBridgeStateChanged() {
+    if (_bridge == null) return;
+    if (_bridge!.waState == WhatsAppState.connected && !_isRunning) {
+      debugPrint('[Tracker] WhatsApp connected → auto-starting tracking');
+      _isRunning = true;
+      _subscribeAllToBridge();
+      notifyListeners();
+    } else if (_bridge!.waState == WhatsAppState.disconnected && _isRunning) {
+      debugPrint('[Tracker] WhatsApp disconnected → pausing tracking');
+      _isRunning = false;
+      notifyListeners();
+    }
   }
 
   void _subscribeAllToBridge() {
     if (_bridge == null) return;
+    debugPrint('[Tracker] Subscribing ${_contacts.length} contacts to bridge');
     for (final c in _contacts) {
       if (c.isTracking) {
+        debugPrint('[Tracker] → subscribing ' + c.name + ' (' + c.phoneNumber + ')');
         _bridge!.subscribePresence(c.phoneNumber, contactId: c.id);
       }
     }
@@ -80,26 +101,42 @@ class TrackerService extends ChangeNotifier {
 
   // ── Handle real presence event from bridge ────────────────
   void _handlePresenceFromBridge(PresenceEvent event) {
-    // Find contact by contactId first, then fall back to phone match
+    debugPrint(
+      '[Tracker] Presence received — contactId: ${event.contactId}, isOnline: ${event.isOnline}, status: ${event.status}',
+    );
+    debugPrint('[Tracker] Known contacts: ${_contacts.map((c) => c.id + ':' + c.name).join(', ')}');
+
     TrackedContact? contact;
 
+    // 1. Match by contactId (UUID set by the bridge from our subscription)
     if (event.contactId != null) {
       try {
         contact = _contacts.firstWhere((c) => c.id == event.contactId);
-      } catch (_) {}
+        debugPrint('[Tracker] Matched by contactId: ${contact.name}');
+      } catch (_) {
+        debugPrint('[Tracker] contactId ${event.contactId} not found in local contacts');
+      }
+    }
+
+    // 2. Fallback: match by phone digits
+    // Note: event.phone may be LID digits on new WhatsApp — contactId match above is preferred
+    if (contact == null) {
+      final phone = event.phone.replaceAll(RegExp(r'\D'), '');
+      debugPrint('[Tracker] Trying phone fallback with digits: $phone');
+      try {
+        contact = _contacts.firstWhere((c) => c.phoneNumber.replaceAll(RegExp(r'\D'), '') == phone);
+        debugPrint('[Tracker] Matched by phone: ${contact.name}');
+      } catch (_) {
+        debugPrint('[Tracker] No phone match for $phone');
+      }
     }
 
     if (contact == null) {
-      final phone = event.phone.replaceAll(RegExp(r'\D'), '');
-      try {
-        contact = _contacts.firstWhere(
-          (c) => c.phoneNumber.replaceAll(RegExp(r'\D'), '') == phone,
-        );
-      } catch (_) {}
+      debugPrint('[Tracker] No contact found — dropping presence event');
+      return;
     }
 
-    if (contact == null) return; // not a tracked contact
-
+    debugPrint('[Tracker] Dispatching presence for ${contact.name} — isOnline: ${event.isOnline}');
     handlePresenceEvent(contact.id, isOnline: event.isOnline);
   }
 
@@ -109,11 +146,7 @@ class TrackerService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<TrackedContact> addContact({
-    required String name,
-    required String phoneNumber,
-    String? note,
-  }) async {
+  Future<TrackedContact> addContact({required String name, required String phoneNumber, String? note}) async {
     final contact = TrackedContact(
       id: _uuid.v4(),
       name: name,
@@ -125,8 +158,9 @@ class TrackerService extends ChangeNotifier {
     _contacts.insert(0, contact);
     notifyListeners();
 
-    // Subscribe this contact on the bridge
-    if (_isRunning && _bridge != null) {
+    // Subscribe to bridge if WhatsApp is connected
+    // (regardless of _isRunning — bridge connection is the source of truth)
+    if (_bridge != null && _bridge!.waState == WhatsAppState.connected) {
       _bridge!.subscribePresence(contact.phoneNumber, contactId: contact.id);
     }
 
@@ -143,10 +177,7 @@ class TrackerService extends ChangeNotifier {
   }
 
   Future<void> deleteContact(String id) async {
-    final contact = _contacts.firstWhere(
-      (c) => c.id == id,
-      orElse: () => throw Exception('not found'),
-    );
+    final contact = _contacts.firstWhere((c) => c.id == id, orElse: () => throw Exception('not found'));
     _bridge?.unsubscribePresence(contact.phoneNumber);
     await _db.deleteContact(id);
     _contacts.removeWhere((c) => c.id == id);
@@ -193,10 +224,7 @@ class TrackerService extends ChangeNotifier {
   }
 
   // ── Core presence handler ─────────────────────────────────
-  Future<void> handlePresenceEvent(
-    String contactId, {
-    required bool isOnline,
-  }) async {
+  Future<void> handlePresenceEvent(String contactId, {required bool isOnline}) async {
     final idx = _contacts.indexWhere((c) => c.id == contactId);
     if (idx == -1) return;
 
@@ -227,8 +255,7 @@ class TrackerService extends ChangeNotifier {
     await _db.insertStatusEvent(event);
 
     // Update stats
-    final addMinutes =
-        durationSeconds != null ? (durationSeconds / 60).round() : 0;
+    final addMinutes = durationSeconds != null ? (durationSeconds / 60).round() : 0;
     await _db.updateContactStatus(
       contactId,
       isOnline: isOnline,
@@ -240,8 +267,7 @@ class TrackerService extends ChangeNotifier {
     final updated = contact.copyWith(
       isCurrentlyOnline: isOnline,
       lastSeen: isOnline ? contact.lastSeen : now,
-      totalSessions:
-          isOnline ? contact.totalSessions + 1 : contact.totalSessions,
+      totalSessions: isOnline ? contact.totalSessions + 1 : contact.totalSessions,
       totalOnlineMinutes: contact.totalOnlineMinutes + addMinutes,
     );
     _contacts[idx] = updated;
@@ -254,10 +280,10 @@ class TrackerService extends ChangeNotifier {
 
   Future<void> _sendOnlineNotification(TrackedContact contact) async {
     await _notifications.show(
-      contact.hashCode,
-      '${contact.name} is online',
-      'Just came online on WhatsApp',
-      const NotificationDetails(
+      id: contact.hashCode,
+      title: '${contact.name} is online',
+      body: 'Just came online on WhatsApp',
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           'wastat_online',
           'Online Alerts',
@@ -272,21 +298,14 @@ class TrackerService extends ChangeNotifier {
   }
 
   // ── Helpers ──────────────────────────────────────────────
-  String _normalizePhone(String phone) =>
-      phone.replaceAll(RegExp(r'[^\d+]'), '');
+  String _normalizePhone(String phone) => phone.replaceAll(RegExp(r'[^\d+]'), '');
 
-  Future<List<StatusEvent>> getEventsForContact(
-    String contactId, {
-    int? limit,
-    DateTime? since,
-  }) =>
+  Future<List<StatusEvent>> getEventsForContact(String contactId, {int? limit, DateTime? since}) =>
       _db.getEventsForContact(contactId, limit: limit, since: since);
 
-  Future<Map<int, int>> getHourlyDistribution(String contactId) =>
-      _db.getHourlyDistribution(contactId);
+  Future<Map<int, int>> getHourlyDistribution(String contactId) => _db.getHourlyDistribution(contactId);
 
-  Future<List<Map<String, dynamic>>> getDailyOnlineTime(
-          String contactId, int days) =>
+  Future<List<Map<String, dynamic>>> getDailyOnlineTime(String contactId, int days) =>
       _db.getDailyOnlineTime(contactId, days);
 
   TrackedContact? getContact(String id) {
@@ -300,6 +319,7 @@ class TrackerService extends ChangeNotifier {
   @override
   void dispose() {
     _presenceSub?.cancel();
+    _bridge?.removeListener(_onBridgeStateChanged);
     super.dispose();
   }
 }

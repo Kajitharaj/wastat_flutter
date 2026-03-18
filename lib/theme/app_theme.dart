@@ -65,11 +65,7 @@ class AppTheme {
         foregroundColor: textPrimary,
         elevation: 0,
         centerTitle: false,
-        titleTextStyle: GoogleFonts.nunito(
-          color: textPrimary,
-          fontSize: 20,
-          fontWeight: FontWeight.w700,
-        ),
+        titleTextStyle: GoogleFonts.nunito(color: textPrimary, fontSize: 20, fontWeight: FontWeight.w700),
         iconTheme: const IconThemeData(color: textPrimary),
       ),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(
@@ -79,33 +75,18 @@ class AppTheme {
         type: BottomNavigationBarType.fixed,
         elevation: 8,
       ),
-      cardTheme: const CardTheme(
-        color: bgCard,
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.all(Radius.circular(12)),
-        ),
-      ),
+
       floatingActionButtonTheme: const FloatingActionButtonThemeData(
         backgroundColor: primaryGreen,
         foregroundColor: Colors.white,
         elevation: 4,
       ),
-      dividerTheme: const DividerThemeData(
-        color: dividerColor,
-        thickness: 1,
-      ),
+      dividerTheme: const DividerThemeData(color: dividerColor, thickness: 1),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: bgElevated,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide.none,
-        ),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: primaryGreen, width: 1.5),
@@ -124,9 +105,7 @@ class AppTheme {
           return bgElevated;
         }),
       ),
-      progressIndicatorTheme: const ProgressIndicatorThemeData(
-        color: primaryGreen,
-      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(color: primaryGreen),
       chipTheme: ChipThemeData(
         backgroundColor: bgElevated,
         labelStyle: const TextStyle(color: textSecondary),

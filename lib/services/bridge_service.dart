@@ -12,17 +12,12 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:http/http.dart' as http;
 
 // ── Bridge connection state ──────────────────────────────
-enum BridgeState {
-  disconnected,
-  connecting,
-  connected,
-  error,
-}
+enum BridgeState { disconnected, connecting, connected, error }
 
 enum WhatsAppState {
   disconnected,
-  qrPending,     // waiting for QR scan
-  connected,     // fully authenticated
+  qrPending, // waiting for QR scan
+  connected, // fully authenticated
 }
 
 // ── Event types from bridge ──────────────────────────────
@@ -51,9 +46,7 @@ class PresenceEvent {
       phone: json['phone'] as String,
       isOnline: json['isOnline'] as bool,
       status: json['status'] as String,
-      lastSeen: json['lastSeen'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(json['lastSeen'] as int)
-          : null,
+      lastSeen: json['lastSeen'] != null ? DateTime.fromMillisecondsSinceEpoch(json['lastSeen'] as int) : null,
       contactId: json['contactId'] as String?,
       timestamp: DateTime.fromMillisecondsSinceEpoch(json['ts'] as int),
     );
@@ -95,9 +88,7 @@ class BridgeService extends ChangeNotifier {
   String? get lastError => _lastError;
   String get bridgeHost => _bridgeHost;
   bool get isConfigured => _bridgeHost.isNotEmpty && _apiSecret.isNotEmpty;
-  bool get isFullyConnected =>
-      _bridgeState == BridgeState.connected &&
-      _waState == WhatsAppState.connected;
+  bool get isFullyConnected => _bridgeState == BridgeState.connected && _waState == WhatsAppState.connected;
 
   // ── Init ──────────────────────────────────────────────
   Future<void> initialize() async {
@@ -110,10 +101,7 @@ class BridgeService extends ChangeNotifier {
   }
 
   // ── Save config ────────────────────────────────────────
-  Future<void> saveConfig({
-    required String bridgeHost,
-    required String apiSecret,
-  }) async {
+  Future<void> saveConfig({required String bridgeHost, required String apiSecret}) async {
     _bridgeHost = bridgeHost.trim().replaceAll(RegExp(r'/$'), '');
     _apiSecret = apiSecret.trim();
 
@@ -142,17 +130,11 @@ class BridgeService extends ChangeNotifier {
 
     try {
       // Convert http://host:3000 → ws://host:8080
-      final wsUrl = _bridgeHost
-          .replaceFirst(RegExp(r'^http'), 'ws')
-          .replaceFirst(RegExp(r':\d+$'), ':8080');
+      final wsUrl = _bridgeHost.replaceFirst(RegExp(r'^http'), 'ws').replaceFirst(RegExp(r':\d+$'), ':8080');
 
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
 
-      _wsSub = _channel!.stream.listen(
-        _handleWsMessage,
-        onError: _handleWsError,
-        onDone: _handleWsDone,
-      );
+      _wsSub = _channel!.stream.listen(_handleWsMessage, onError: _handleWsError, onDone: _handleWsDone);
 
       _bridgeState = BridgeState.connected;
       _reconnectAttempts = 0;
@@ -163,7 +145,6 @@ class BridgeService extends ChangeNotifier {
 
       // Request current status immediately
       _sendWsMessage({'type': 'get_status', 'secret': _apiSecret});
-
     } catch (e) {
       _handleWsError(e);
     }
@@ -211,15 +192,24 @@ class BridgeService extends ChangeNotifier {
         break;
 
       case 'presence':
-        final event = PresenceEvent.fromJson(msg);
-        _presenceController.add(event);
+        try {
+          debugPrint('[Bridge] Presence payload: $msg');
+          final event = PresenceEvent.fromJson(msg);
+          debugPrint(
+            '[Bridge] Presence parsed — isOnline: ${event.isOnline}, contactId: ${event.contactId}, phone: ${event.phone}',
+          );
+          _presenceController.add(event);
+          debugPrint('[Bridge] Presence added to stream — listeners: ${_presenceController.hasListener}');
+        } catch (e, stack) {
+          debugPrint('[Bridge] ERROR parsing presence event: $e');
+          debugPrint('[Bridge] Stack: $stack');
+          debugPrint('[Bridge] Raw msg was: $msg');
+        }
         break;
 
       case 'bridge_status':
         final connected = msg['connected'] as bool? ?? false;
-        _waState = connected
-            ? WhatsAppState.connected
-            : WhatsAppState.disconnected;
+        _waState = connected ? WhatsAppState.connected : WhatsAppState.disconnected;
         notifyListeners();
         break;
 
@@ -252,7 +242,7 @@ class BridgeService extends ChangeNotifier {
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
     final delay = Duration(
-      seconds: (2 << _reconnectAttempts.clamp(0, 6)),  // 2,4,8,16...128s
+      seconds: (2 << _reconnectAttempts.clamp(0, 6)), // 2,4,8,16...128s
     );
     _reconnectAttempts++;
     debugPrint('[Bridge] Reconnecting in ${delay.inSeconds}s...');
@@ -286,18 +276,13 @@ class BridgeService extends ChangeNotifier {
   }
 
   void unsubscribePresence(String phone) {
-    _sendWsMessage({
-      'type': 'unsubscribe',
-      'secret': _apiSecret,
-      'phone': phone,
-    });
+    _sendWsMessage({'type': 'unsubscribe', 'secret': _apiSecret, 'phone': phone});
   }
 
   // ── HTTP REST calls ────────────────────────────────────
   Future<Map<String, dynamic>?> getStatus() => _get('/status');
 
-  Future<Map<String, dynamic>?> subscribeBulk(
-      List<Map<String, String>> contacts) =>
+  Future<Map<String, dynamic>?> subscribeBulk(List<Map<String, String>> contacts) =>
       _post('/subscribe-bulk', {'contacts': contacts});
 
   Future<Map<String, dynamic>?> logout() => _post('/logout', {});
@@ -305,9 +290,7 @@ class BridgeService extends ChangeNotifier {
   Future<Map<String, dynamic>?> _get(String path) async {
     try {
       final uri = Uri.parse('$_bridgeHost$path');
-      final res = await http.get(uri, headers: _headers).timeout(
-        const Duration(seconds: 10),
-      );
+      final res = await http.get(uri, headers: _headers).timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
       }
@@ -317,13 +300,10 @@ class BridgeService extends ChangeNotifier {
     return null;
   }
 
-  Future<Map<String, dynamic>?> _post(
-      String path, Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>?> _post(String path, Map<String, dynamic> body) async {
     try {
       final uri = Uri.parse('$_bridgeHost$path');
-      final res = await http
-          .post(uri, headers: _headers, body: jsonEncode(body))
-          .timeout(const Duration(seconds: 10));
+      final res = await http.post(uri, headers: _headers, body: jsonEncode(body)).timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
         return jsonDecode(res.body) as Map<String, dynamic>;
       }
@@ -333,18 +313,13 @@ class BridgeService extends ChangeNotifier {
     return null;
   }
 
-  Map<String, String> get _headers => {
-    'Content-Type': 'application/json',
-    'x-api-secret': _apiSecret,
-  };
+  Map<String, String> get _headers => {'Content-Type': 'application/json', 'x-api-secret': _apiSecret};
 
   // ── Test connection ────────────────────────────────────
   Future<bool> testConnection(String host, String secret) async {
     try {
       final uri = Uri.parse('$host/health');
-      final res = await http
-          .get(uri)
-          .timeout(const Duration(seconds: 5));
+      final res = await http.get(uri).timeout(const Duration(seconds: 5));
       return res.statusCode == 200;
     } catch (_) {
       return false;

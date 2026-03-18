@@ -18,8 +18,7 @@ class ContactDetailScreen extends StatefulWidget {
   State<ContactDetailScreen> createState() => _ContactDetailScreenState();
 }
 
-class _ContactDetailScreenState extends State<ContactDetailScreen>
-    with SingleTickerProviderStateMixin {
+class _ContactDetailScreenState extends State<ContactDetailScreen> with SingleTickerProviderStateMixin {
   late TabController _tabCtrl;
   List<StatusEvent> _events = [];
   Map<int, int> _hourlyDist = {};
@@ -64,24 +63,16 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
       builder: (context, tracker, _) {
         final contact = tracker.getContact(widget.contactId);
         if (contact == null) {
-          return const Scaffold(
-            body: Center(child: Text('Contact not found')),
-          );
+          return const Scaffold(body: Center(child: Text('Contact not found')));
         }
 
         return Scaffold(
           backgroundColor: AppTheme.bgPrimary,
           body: NestedScrollView(
-            headerSliverBuilder: (ctx, scrolled) => [
-              _buildSliverAppBar(contact, tracker),
-            ],
+            headerSliverBuilder: (ctx, scrolled) => [_buildSliverAppBar(contact, tracker)],
             body: TabBarView(
               controller: _tabCtrl,
-              children: [
-                _buildLogTab(),
-                _buildStatsTab(contact),
-                _buildChartTab(),
-              ],
+              children: [_buildLogTab(), _buildStatsTab(contact), _buildChartTab()],
             ),
           ),
         );
@@ -94,15 +85,12 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
       expandedHeight: 200,
       pinned: true,
       backgroundColor: AppTheme.bgSecondary,
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back),
-        onPressed: () => Navigator.pop(context),
-      ),
+      leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
       actions: [
         Switch(
           value: contact.isTracking,
           onChanged: (_) => tracker.toggleTracking(contact.id),
-          activeColor: AppTheme.primaryGreen,
+          activeThumbColor: AppTheme.primaryGreen,
         ),
         const SizedBox(width: 8),
       ],
@@ -114,55 +102,47 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
             children: [
               const SizedBox(height: 50),
               // Avatar
-              Stack(
-                alignment: Alignment.bottomRight,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  CircleAvatar(
-                    radius: 38,
-                    backgroundColor: _avatarColor(contact),
-                    child: Text(
-                      contact.initials,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
+                  Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      CircleAvatar(
+                        radius: 38,
+                        backgroundColor: _avatarColor(contact),
+                        child: Text(
+                          contact.initials,
+                          style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700),
+                        ),
                       ),
-                    ),
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 400),
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: contact.isCurrentlyOnline ? AppTheme.onlineColor : AppTheme.bgElevated,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: AppTheme.bgSecondary, width: 2.5),
+                        ),
+                      ),
+                    ],
                   ),
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 400),
-                    width: 16,
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: contact.isCurrentlyOnline
-                          ? AppTheme.onlineColor
-                          : AppTheme.bgElevated,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                          color: AppTheme.bgSecondary, width: 2.5),
-                    ),
+                  Column(
+                    children: [
+                      Text(
+                        contact.name,
+                        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 18, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(contact.phoneNumber, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                      const SizedBox(height: 4),
+                      _StatusBadge(contact: contact),
+                    ],
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              Text(
-                contact.name,
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                contact.phoneNumber,
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 13,
-                ),
-              ),
-              const SizedBox(height: 4),
-              _StatusBadge(contact: contact),
             ],
           ),
         ),
@@ -184,9 +164,7 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
   // ── Activity Log Tab ─────────────────────────────────────
   Widget _buildLogTab() {
     if (_loadingLogs) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppTheme.primaryGreen),
-      );
+      return const Center(child: CircularProgressIndicator(color: AppTheme.primaryGreen));
     }
 
     if (_events.isEmpty) {
@@ -196,8 +174,7 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
           children: [
             Icon(Icons.history, size: 48, color: AppTheme.textTertiary),
             SizedBox(height: 12),
-            Text('No activity recorded yet',
-                style: TextStyle(color: AppTheme.textSecondary)),
+            Text('No activity recorded yet', style: TextStyle(color: AppTheme.textSecondary)),
           ],
         ),
       );
@@ -223,9 +200,7 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
 
   // ── Statistics Tab ────────────────────────────────────────
   Widget _buildStatsTab(TrackedContact contact) {
-    final avgSession = contact.totalSessions > 0
-        ? (contact.totalOnlineMinutes / contact.totalSessions).round()
-        : 0;
+    final avgSession = contact.totalSessions > 0 ? (contact.totalOnlineMinutes / contact.totalSessions).round() : 0;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -233,15 +208,15 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
         children: [
           _StatsGrid(
             items: [
-              _StatItem('Total Sessions', '${contact.totalSessions}',
-                  Icons.repeat, AppTheme.primaryGreen),
-              _StatItem('Total Online', contact.formattedTotalTime,
-                  Icons.timer_outlined, AppTheme.accentTeal),
-              _StatItem('Avg Session', '${avgSession}m',
-                  Icons.av_timer, AppTheme.awayColor),
-              _StatItem('Tracking Since',
-                  DateFormat('MMM d, y').format(contact.addedAt),
-                  Icons.calendar_today_outlined, AppTheme.offlineColor),
+              _StatItem('Total Sessions', '${contact.totalSessions}', Icons.repeat, AppTheme.primaryGreen),
+              _StatItem('Total Online', contact.formattedTotalTime, Icons.timer_outlined, AppTheme.accentTeal),
+              _StatItem('Avg Session', '${avgSession}m', Icons.av_timer, AppTheme.awayColor),
+              _StatItem(
+                'Tracking Since',
+                DateFormat('MMM d, y').format(contact.addedAt),
+                Icons.calendar_today_outlined,
+                AppTheme.offlineColor,
+              ),
             ],
           ),
           const SizedBox(height: 16),
@@ -271,21 +246,16 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
 
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.bgCard,
-        borderRadius: BorderRadius.circular(16),
-      ),
+      decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Most Active Hours',
-              style: TextStyle(
-                  color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 4),
-          Text(
-            'Peak: $hour12:00 $amPm',
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+          const Text(
+            'Most Active Hours',
+            style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
           ),
+          const SizedBox(height: 4),
+          Text('Peak: $hour12:00 $amPm', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
           const SizedBox(height: 16),
           _HourlyBarChart(data: _hourlyDist),
         ],
@@ -297,13 +267,7 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
   Widget _buildChartTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          _buildDailyLineChart(),
-          const SizedBox(height: 16),
-          _buildOnlinePieCard(),
-        ],
-      ),
+      child: Column(children: [_buildDailyLineChart(), const SizedBox(height: 16), _buildOnlinePieCard()]),
     );
   }
 
@@ -311,13 +275,9 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
     if (_dailyData.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: AppTheme.bgCard,
-          borderRadius: BorderRadius.circular(16),
-        ),
+        decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(16)),
         child: const Center(
-          child: Text('Not enough data yet',
-              style: TextStyle(color: AppTheme.textSecondary)),
+          child: Text('Not enough data yet', style: TextStyle(color: AppTheme.textSecondary)),
         ),
       );
     }
@@ -330,18 +290,15 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
 
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.bgCard,
-        borderRadius: BorderRadius.circular(16),
-      ),
+      decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Daily Online Time (minutes)',
-              style: TextStyle(
-                  color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
-          const Text('Last 14 days',
-              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+          const Text(
+            'Daily Online Time (minutes)',
+            style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
+          ),
+          const Text('Last 14 days', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
           const SizedBox(height: 20),
           SizedBox(
             height: 160,
@@ -350,32 +307,20 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
                 gridData: FlGridData(
                   drawVerticalLine: false,
                   horizontalInterval: 30,
-                  getDrawingHorizontalLine: (_) => FlLine(
-                    color: AppTheme.dividerColor,
-                    strokeWidth: 1,
-                  ),
+                  getDrawingHorizontalLine: (_) => FlLine(color: AppTheme.dividerColor, strokeWidth: 1),
                 ),
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
                       reservedSize: 36,
-                      getTitlesWidget: (v, _) => Text(
-                        '${v.toInt()}m',
-                        style: const TextStyle(
-                            color: AppTheme.textTertiary, fontSize: 10),
-                      ),
+                      getTitlesWidget: (v, _) =>
+                          Text('${v.toInt()}m', style: const TextStyle(color: AppTheme.textTertiary, fontSize: 10)),
                     ),
                   ),
-                  bottomTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  rightTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  topTitles: const AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
+                  bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 ),
                 borderData: FlBorderData(show: false),
                 lineBarsData: [
@@ -384,10 +329,7 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
                     isCurved: true,
                     color: AppTheme.primaryGreen,
                     barWidth: 2.5,
-                    belowBarData: BarAreaData(
-                      show: true,
-                      color: AppTheme.primaryGreen.withOpacity(0.1),
-                    ),
+                    belowBarData: BarAreaData(show: true, color: AppTheme.primaryGreen.withOpacity(0.1)),
                     dotData: FlDotData(
                       show: true,
                       getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
@@ -415,16 +357,14 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
 
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.bgCard,
-        borderRadius: BorderRadius.circular(16),
-      ),
+      decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(16)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Event Distribution',
-              style: TextStyle(
-                  color: AppTheme.textPrimary, fontWeight: FontWeight.w600)),
+          const Text(
+            'Event Distribution',
+            style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
+          ),
           const SizedBox(height: 20),
           SizedBox(
             height: 140,
@@ -441,10 +381,7 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
                           color: AppTheme.onlineColor,
                           radius: 30,
                           title: '$onlineEvents',
-                          titleStyle: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold),
+                          titleStyle: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                         ),
                         PieChartSectionData(
                           value: offlineEvents.toDouble(),
@@ -452,9 +389,10 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
                           radius: 30,
                           title: '$offlineEvents',
                           titleStyle: const TextStyle(
-                              color: AppTheme.textSecondary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold),
+                            color: AppTheme.textSecondary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ],
                     ),
@@ -465,15 +403,9 @@ class _ContactDetailScreenState extends State<ContactDetailScreen>
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _LegendItem(
-                        color: AppTheme.onlineColor,
-                        label: 'Online events',
-                        count: onlineEvents),
+                    _LegendItem(color: AppTheme.onlineColor, label: 'Online events', count: onlineEvents),
                     const SizedBox(height: 12),
-                    _LegendItem(
-                        color: AppTheme.bgElevated,
-                        label: 'Offline events',
-                        count: offlineEvents),
+                    _LegendItem(color: AppTheme.bgElevated, label: 'Offline events', count: offlineEvents),
                   ],
                 ),
               ],
@@ -507,9 +439,7 @@ class _StatusBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
-        color: contact.isCurrentlyOnline
-            ? AppTheme.onlineColor.withOpacity(0.15)
-            : AppTheme.bgElevated,
+        color: contact.isCurrentlyOnline ? AppTheme.onlineColor.withOpacity(0.15) : AppTheme.bgElevated,
         borderRadius: BorderRadius.circular(20),
         border: Border.all(
           color: contact.isCurrentlyOnline
@@ -520,9 +450,7 @@ class _StatusBadge extends StatelessWidget {
       child: Text(
         contact.isCurrentlyOnline ? 'Online Now' : contact.formattedLastSeen,
         style: TextStyle(
-          color: contact.isCurrentlyOnline
-              ? AppTheme.onlineColor
-              : AppTheme.textSecondary,
+          color: contact.isCurrentlyOnline ? AppTheme.onlineColor : AppTheme.textSecondary,
           fontSize: 12,
           fontWeight: FontWeight.w600,
         ),
@@ -572,12 +500,7 @@ class _EventTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppTheme.bgCard,
         borderRadius: BorderRadius.circular(10),
-        border: Border(
-          left: BorderSide(
-            color: isOnline ? AppTheme.onlineColor : AppTheme.offlineColor,
-            width: 3,
-          ),
-        ),
+        border: Border(left: BorderSide(color: isOnline ? AppTheme.onlineColor : AppTheme.offlineColor, width: 3)),
       ),
       child: Row(
         children: [
@@ -600,21 +523,11 @@ class _EventTile extends StatelessWidget {
           if (event.durationSeconds != null && event.durationSeconds! > 0)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppTheme.bgElevated,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                event.formattedDuration,
-                style: const TextStyle(
-                    color: AppTheme.accentTeal, fontSize: 11),
-              ),
+              decoration: BoxDecoration(color: AppTheme.bgElevated, borderRadius: BorderRadius.circular(8)),
+              child: Text(event.formattedDuration, style: const TextStyle(color: AppTheme.accentTeal, fontSize: 11)),
             ),
           const SizedBox(width: 8),
-          Text(
-            event.formattedTime,
-            style: const TextStyle(color: AppTheme.textTertiary, fontSize: 12),
-          ),
+          Text(event.formattedTime, style: const TextStyle(color: AppTheme.textTertiary, fontSize: 12)),
         ],
       ),
     );
@@ -655,10 +568,7 @@ class _StatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.bgCard,
-        borderRadius: BorderRadius.circular(14),
-      ),
+      decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(14)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.center,
@@ -667,18 +577,10 @@ class _StatCard extends StatelessWidget {
           const Spacer(),
           Text(
             item.value,
-            style: TextStyle(
-              color: item.color,
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-            ),
+            style: TextStyle(color: item.color, fontSize: 20, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 2),
-          Text(
-            item.label,
-            style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 11),
-          ),
+          Text(item.label, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
         ],
       ),
     );
@@ -720,18 +622,20 @@ class _HourlyBarChart extends StatelessWidget {
                 showTitles: true,
                 interval: 6,
                 getTitlesWidget: (v, _) => Text(
-                  v == 0 ? '12am' : v == 6 ? '6am' : v == 12 ? '12pm' : '6pm',
-                  style: const TextStyle(
-                      color: AppTheme.textTertiary, fontSize: 9),
+                  v == 0
+                      ? '12am'
+                      : v == 6
+                      ? '6am'
+                      : v == 12
+                      ? '12pm'
+                      : '6pm',
+                  style: const TextStyle(color: AppTheme.textTertiary, fontSize: 9),
                 ),
               ),
             ),
-            leftTitles: const AxisTitles(
-                sideTitles: SideTitles(showTitles: false)),
-            rightTitles: const AxisTitles(
-                sideTitles: SideTitles(showTitles: false)),
-            topTitles: const AxisTitles(
-                sideTitles: SideTitles(showTitles: false)),
+            leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           ),
           barGroups: groups,
         ),
@@ -744,8 +648,7 @@ class _LegendItem extends StatelessWidget {
   final Color color;
   final String label;
   final int count;
-  const _LegendItem(
-      {required this.color, required this.label, required this.count});
+  const _LegendItem({required this.color, required this.label, required this.count});
 
   @override
   Widget build(BuildContext context) {
@@ -754,21 +657,17 @@ class _LegendItem extends StatelessWidget {
         Container(
           width: 12,
           height: 12,
-          decoration:
-              BoxDecoration(color: color, borderRadius: BorderRadius.circular(3)),
+          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(3)),
         ),
         const SizedBox(width: 8),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label,
-                style: const TextStyle(
-                    color: AppTheme.textSecondary, fontSize: 11)),
-            Text('$count events',
-                style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600)),
+            Text(label, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
+            Text(
+              '$count events',
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
+            ),
           ],
         ),
       ],
