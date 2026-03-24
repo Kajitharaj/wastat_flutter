@@ -4,16 +4,14 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'services/tracker_service.dart';
 import 'services/bridge_service.dart';
+import 'services/background_service.dart';
 import 'theme/app_theme.dart';
 import 'screens/main_scaffold.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
 
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
@@ -24,15 +22,21 @@ void main() async {
     ),
   );
 
-  // 1. Init bridge (loads saved config, reconnects if already configured)
+  // Initialize foreground task config
+  BackgroundService.initialize();
+
+  // Init bridge (loads saved config)
   final bridgeService = BridgeService();
   await bridgeService.initialize();
 
-  // 2. Init tracker, attach bridge if it's already configured
+  // Init tracker, attach bridge if already configured
   final trackerService = TrackerService();
-  await trackerService.initialize(
-    bridge: bridgeService.isConfigured ? bridgeService : null,
-  );
+  await trackerService.initialize(bridge: bridgeService.isConfigured ? bridgeService : null);
+
+  // Start background service if bridge is configured
+  if (bridgeService.isConfigured) {
+    await BackgroundService.start();
+  }
 
   runApp(
     MultiProvider(

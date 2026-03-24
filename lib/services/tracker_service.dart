@@ -11,6 +11,7 @@ import '../models/contact.dart';
 import '../models/status_event.dart';
 import 'database_service.dart';
 import 'bridge_service.dart';
+import 'background_service.dart';
 
 class TrackerService extends ChangeNotifier {
   final DatabaseService _db = DatabaseService();
@@ -204,17 +205,18 @@ class TrackerService extends ChangeNotifier {
   void startTracking() {
     _isRunning = true;
     _subscribeAllToBridge();
+    BackgroundService.start();
     notifyListeners();
   }
 
   void stopTracking() {
     _isRunning = false;
-    // Unsubscribe all from bridge
     if (_bridge != null) {
       for (final c in _contacts) {
         _bridge!.unsubscribePresence(c.phoneNumber);
       }
     }
+    BackgroundService.stop();
     notifyListeners();
   }
 

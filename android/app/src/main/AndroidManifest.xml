@@ -1,19 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest 
 	xmlns:android="http://schemas.android.com/apk/res/android">
-	<!-- Network access for WhatsApp Web WebSocket -->
+	<!-- user contacts access -->
+	<uses-permission android:name="android.permission.READ_CONTACTS" />
+	<uses-permission android:name="android.permission.WRITE_CONTACTS" />
+	<!-- Network -->
 	<uses-permission android:name="android.permission.INTERNET"/>
 	<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 	<!-- Notifications -->
 	<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 	<uses-permission android:name="android.permission.VIBRATE"/>
-	<!-- Keep tracking alive in background -->
+	<!-- Foreground service — keeps tracking alive when app is killed -->
 	<uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+	<!-- Auto-start after reboot -->
 	<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+	<!-- Keep CPU awake for WebSocket -->
 	<uses-permission android:name="android.permission.WAKE_LOCK"/>
-	<!-- Contacts (optional: import from phone contacts) -->
-	<uses-permission android:name="android.permission.READ_CONTACTS"/>
-	<application android:label="wastat_flutter" android:name="${applicationName}" android:icon="@mipmap/ic_launcher" android:usesCleartextTraffic="false" android:networkSecurityConfig="@xml/network_security_config" android:requestLegacyExternalStorage="false">
+	<!-- Keep WiFi awake for WebSocket -->
+	<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+	<!-- Battery optimization (user prompted to disable for reliable tracking) -->
+	<uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+	<application android:label="WaStat" android:name="${applicationName}" android:icon="@mipmap/ic_launcher" android:usesCleartextTraffic="true">
 		<activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:theme="@style/LaunchTheme" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode" android:hardwareAccelerated="true" android:windowSoftInputMode="adjustResize">
 			<meta-data android:name="io.flutter.embedding.android.NormalTheme" android:resource="@style/NormalTheme"/>
 			<intent-filter>
@@ -21,11 +29,13 @@
 				<category android:name="android.intent.category.LAUNCHER"/>
 			</intent-filter>
 		</activity>
-		<!-- Workmanager background tasks -->
-		<service android:name="androidx.work.impl.foreground.SystemForegroundService" android:foregroundServiceType="dataSync"/>
-		<receiver android:name="androidx.work.impl.background.systemalarm.RescheduleReceiver" android:exported="false" android:directBootAware="false">
+		<!-- flutter_foreground_task foreground service -->
+		<service android:name="com.pravera.flutter_foreground_task.service.ForegroundService" android:exported="false" android:foregroundServiceType="dataSync"/>
+		<!-- Auto-restart after reboot -->
+		<receiver android:name="com.pravera.flutter_foreground_task.receiver.BootReceiver" android:exported="true">
 			<intent-filter>
 				<action android:name="android.intent.action.BOOT_COMPLETED"/>
+				<action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
 			</intent-filter>
 		</receiver>
 		<meta-data android:name="flutterEmbedding" android:value="2"/>

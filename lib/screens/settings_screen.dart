@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/tracker_service.dart';
 import '../services/bridge_service.dart';
+import '../services/background_service.dart';
 import '../theme/app_theme.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -40,6 +41,33 @@ class SettingsScreen extends StatelessWidget {
                   onChanged: tracker.setNotificationsEnabled,
                   activeColor: AppTheme.primaryGreen,
                 ),
+              ),
+              FutureBuilder<bool>(
+                future: BackgroundService.isRunning,
+                builder: (ctx, snap) {
+                  final running = snap.data ?? false;
+                  return _SettingsTile(
+                    icon: Icons.sync,
+                    title: 'Background Tracking',
+                    subtitle: running
+                        ? 'Running — tracks even when app is closed'
+                        : 'Stopped — tracking paused when app is closed',
+                    iconColor: running ? AppTheme.onlineColor : AppTheme.textSecondary,
+                    trailing: Switch(
+                      value: running,
+                      onChanged: (v) async {
+                        if (v) {
+                          await BackgroundService.start();
+                        } else {
+                          await BackgroundService.stop();
+                        }
+                        // Rebuild this FutureBuilder
+                        (ctx as Element).markNeedsBuild();
+                      },
+                      activeColor: AppTheme.primaryGreen,
+                    ),
+                  );
+                },
               ),
 
               _SectionHeader('About'),

@@ -46,6 +46,11 @@ dependencies:
   http: ^1.6.0
   flutter_secure_storage: ^10.0.0
 
+  # Background foreground service
+  flutter_foreground_task: ^9.2.1
+
+  flutter_contacts_service: ^0.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
