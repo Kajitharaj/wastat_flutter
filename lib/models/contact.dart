@@ -81,12 +81,26 @@ class TrackedContact {
       note: map['note'] as String?,
       isTracking: (map['isTracking'] as int) == 1,
       isCurrentlyOnline: (map['isCurrentlyOnline'] as int) == 1,
-      lastSeen: map['lastSeen'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['lastSeen'] as int)
-          : null,
+      lastSeen: map['lastSeen'] != null ? DateTime.fromMillisecondsSinceEpoch(map['lastSeen'] as int) : null,
       addedAt: DateTime.fromMillisecondsSinceEpoch(map['addedAt'] as int),
       totalSessions: map['totalSessions'] as int? ?? 0,
       totalOnlineMinutes: map['totalOnlineMinutes'] as int? ?? 0,
+    );
+  }
+
+  static TrackedContact empty() {
+    return TrackedContact(
+      id: '',
+      name: '',
+      phoneNumber: '',
+      avatarPath: null,
+      note: null,
+      isTracking: false,
+      isCurrentlyOnline: false,
+      lastSeen: null,
+      addedAt: DateTime.now(),
+      totalSessions: 0,
+      totalOnlineMinutes: 0,
     );
   }
 

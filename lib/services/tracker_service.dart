@@ -107,10 +107,15 @@ class TrackerService extends ChangeNotifier {
       if (historyMap == null || historyMap.isEmpty) return;
 
       int inserted = 0;
+      final Map<String, int> sessionIncrments = {}; // Track session increments per contact
+      final Map<String, int> minuteIncrments = {}; // Track minute increments per contact
 
       for (final entry in historyMap.entries) {
         final contactId = entry.key;
         final allEvents = entry.value.expand((d) => d.events).toList()..sort((a, b) => a.ts.compareTo(b.ts));
+
+        sessionIncrments[contactId] = 0;
+        minuteIncrments[contactId] = 0;
 
         DateTime? sessionStart;
 
@@ -130,6 +135,7 @@ class TrackerService extends ChangeNotifier {
                 timestamp: tsTimestamp,
               ),
             );
+            sessionIncrments[contactId] = (sessionIncrments[contactId] ?? 0) + 1;
             inserted++;
           } else if (e.isOffline) {
             final lastSeenMs = e.lastSeen ?? e.ts;
@@ -150,9 +156,32 @@ class TrackerService extends ChangeNotifier {
                 durationSeconds: duration,
               ),
             );
+            if (duration != null && duration > 0) {
+              minuteIncrments[contactId] = (minuteIncrments[contactId] ?? 0) + (duration / 60).round();
+            }
             inserted++;
           }
           // composing / recording — skip
+        }
+      }
+
+      // Update contact statistics for all new events
+      for (final entry in sessionIncrments.entries) {
+        final contactId = entry.key;
+        final sessionIncrement = entry.value;
+        final minuteIncrement = minuteIncrments[contactId] ?? 0;
+
+        if (sessionIncrement > 0 || minuteIncrement > 0) {
+          final contact = _contacts.firstWhere((c) => c.id == contactId, orElse: () => TrackedContact.empty());
+          if (contact.id.isNotEmpty) {
+            await _db.updateContactStatus(
+              contactId,
+              isOnline: contact.isCurrentlyOnline,
+              lastSeen: contact.isCurrentlyOnline ? null : contact.lastSeen,
+              addToSessions: sessionIncrement,
+              addToMinutes: minuteIncrement,
+            );
+          }
         }
       }
 
@@ -275,7 +304,9 @@ class TrackerService extends ChangeNotifier {
   void stopTracking() {
     _isRunning = false;
     if (_bridge != null) {
-      for (final c in _contacts) _bridge!.unsubscribePresence(c.phoneNumber);
+      for (final c in _contacts) {
+        _bridge!.unsubscribePresence(c.phoneNumber);
+      }
     }
     BackgroundService.stop();
     notifyListeners();
