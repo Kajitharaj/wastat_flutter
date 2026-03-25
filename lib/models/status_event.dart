@@ -7,13 +7,15 @@ class StatusEvent {
   final String contactId;
   final StatusType status;
   final DateTime timestamp;
-  final int? durationSeconds; // duration of previous online session (when going offline)
+  final DateTime? exactLastSeen;
+  final int? durationSeconds;
 
   StatusEvent({
     required this.id,
     required this.contactId,
     required this.status,
     required this.timestamp,
+    this.exactLastSeen,
     this.durationSeconds,
   });
 
@@ -23,6 +25,7 @@ class StatusEvent {
       'contactId': contactId,
       'status': status == StatusType.online ? 'online' : 'offline',
       'timestamp': timestamp.millisecondsSinceEpoch,
+      'exactLastSeen': exactLastSeen?.millisecondsSinceEpoch,
       'durationSeconds': durationSeconds,
     };
   }
@@ -31,10 +34,11 @@ class StatusEvent {
     return StatusEvent(
       id: map['id'] as String,
       contactId: map['contactId'] as String,
-      status: (map['status'] as String) == 'online'
-          ? StatusType.online
-          : StatusType.offline,
+      status: (map['status'] as String) == 'online' ? StatusType.online : StatusType.offline,
       timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp'] as int),
+      exactLastSeen: map['exactLastSeen'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['exactLastSeen'] as int)
+          : null,
       durationSeconds: map['durationSeconds'] as int?,
     );
   }
@@ -43,6 +47,13 @@ class StatusEvent {
     final h = timestamp.hour.toString().padLeft(2, '0');
     final m = timestamp.minute.toString().padLeft(2, '0');
     final s = timestamp.second.toString().padLeft(2, '0');
+    return '$h:$m:$s';
+  }
+
+  String get formattedLastSeenTime {
+    final h = exactLastSeen?.hour.toString().padLeft(2, '0') ?? '00';
+    final m = exactLastSeen?.minute.toString().padLeft(2, '0') ?? '00';
+    final s = exactLastSeen?.second.toString().padLeft(2, '0') ?? '00';
     return '$h:$m:$s';
   }
 

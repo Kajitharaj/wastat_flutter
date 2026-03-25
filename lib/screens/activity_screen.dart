@@ -35,9 +35,9 @@ class _ActivityScreenState extends State<ActivityScreen> {
   }
 
   Future<void> _loadActivities() async {
-    final tracker = context.read<TrackerService>();
+    final tracker  = context.read<TrackerService>();
     final contacts = tracker.contacts;
-    final entries = <_ActivityEntry>[];
+    final entries  = <_ActivityEntry>[];
 
     for (final contact in contacts) {
       final events = await _db.getEventsForContact(
@@ -55,7 +55,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
     if (mounted) {
       setState(() {
         _activities = entries.take(100).toList();
-        _loading = false;
+        _loading    = false;
       });
     }
   }
@@ -68,15 +68,11 @@ class _ActivityScreenState extends State<ActivityScreen> {
         backgroundColor: AppTheme.bgSecondary,
         title: const Text('Activity Feed'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadActivities,
-          ),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadActivities),
         ],
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.primaryGreen))
+          ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryGreen))
           : _activities.isEmpty
               ? _buildEmpty()
               : _buildFeed(),
@@ -106,14 +102,9 @@ class _ActivityScreenState extends State<ActivityScreen> {
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _activities.length,
       separatorBuilder: (_, __) => const Divider(
-        color: AppTheme.dividerColor,
-        height: 1,
-        indent: 70,
+        color: AppTheme.dividerColor, height: 1, indent: 70,
       ),
-      itemBuilder: (ctx, i) {
-        final entry = _activities[i];
-        return _ActivityTile(entry: entry);
-      },
+      itemBuilder: (ctx, i) => _ActivityTile(entry: _activities[i]),
     );
   }
 }
@@ -131,7 +122,14 @@ class _ActivityTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isOnline = entry.event.status == StatusType.online;
-    final contact = entry.contact;
+    final contact  = entry.contact;
+
+    // FIX 11: For offline events, show exactLastSeen (WhatsApp's authoritative
+    // offline time). For online events there is no lastSeen — fall back to
+    // formattedTime (bridge recording timestamp), which is accurate enough.
+    final timeLabel = (!isOnline && entry.event.exactLastSeen != null)
+        ? entry.event.formattedLastSeenTime
+        : entry.event.formattedTime;
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -144,9 +142,9 @@ class _ActivityTile extends StatelessWidget {
             child: Text(
               contact.initials,
               style: const TextStyle(
-                color: Colors.white,
+                color:      Colors.white,
                 fontWeight: FontWeight.w700,
-                fontSize: 13,
+                fontSize:   13,
               ),
             ),
           ),
@@ -154,16 +152,16 @@ class _ActivityTile extends StatelessWidget {
             right: -2,
             bottom: -2,
             child: Container(
-              width: 16,
+              width:  16,
               height: 16,
               decoration: BoxDecoration(
-                color: isOnline ? AppTheme.onlineColor : AppTheme.bgElevated,
-                shape: BoxShape.circle,
+                color:  isOnline ? AppTheme.onlineColor : AppTheme.bgElevated,
+                shape:  BoxShape.circle,
                 border: Border.all(color: AppTheme.bgPrimary, width: 2),
               ),
               child: Icon(
                 isOnline ? Icons.arrow_upward : Icons.arrow_downward,
-                size: 8,
+                size:  8,
                 color: isOnline ? Colors.white : AppTheme.textSecondary,
               ),
             ),
@@ -175,14 +173,14 @@ class _ActivityTile extends StatelessWidget {
           style: const TextStyle(fontSize: 14),
           children: [
             TextSpan(
-              text: contact.name,
+              text:  contact.name,
               style: const TextStyle(
-                color: AppTheme.textPrimary,
+                color:      AppTheme.textPrimary,
                 fontWeight: FontWeight.w600,
               ),
             ),
             TextSpan(
-              text: isOnline ? ' came online' : ' went offline',
+              text:  isOnline ? ' came online' : ' went offline',
               style: TextStyle(
                 color: isOnline ? AppTheme.onlineColor : AppTheme.textSecondary,
               ),
@@ -195,7 +193,7 @@ class _ActivityTile extends StatelessWidget {
         child: Row(
           children: [
             Text(
-              entry.event.formattedTime,
+              timeLabel,
               style: const TextStyle(color: AppTheme.textTertiary, fontSize: 11),
             ),
             if (!isOnline &&
@@ -205,8 +203,7 @@ class _ActivityTile extends StatelessWidget {
                   style: TextStyle(color: AppTheme.textTertiary, fontSize: 11)),
               Text(
                 'Online for ${entry.event.formattedDuration}',
-                style: const TextStyle(
-                    color: AppTheme.accentTeal, fontSize: 11),
+                style: const TextStyle(color: AppTheme.accentTeal, fontSize: 11),
               ),
             ],
           ],
