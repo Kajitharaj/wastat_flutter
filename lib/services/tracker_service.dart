@@ -2,7 +2,7 @@
 //
 // Core tracking service.
 //
-// Foreground: WebSocket delivers ONLINE events → logged immediately.
+// Foreground: WebSocket delivers ALL presence statuses → logged immediately.
 // Background: WorkManager polls bridge history → writes to SQLite.
 // On app resume: one-shot history sync catches anything missed while backgrounded.
 
@@ -24,12 +24,14 @@ class TrackerService extends ChangeNotifier {
   bool _isRunning = false;
   bool _notificationsEnabled = true;
 
+  // Tracks when each contact came online so session duration can be computed
+  // when they go offline. Key = contactId, value = online timestamp.
   final Map<String, DateTime> _onlineSince = {};
 
   BridgeService? _bridge;
   StreamSubscription<PresenceEvent>? _presenceSub;
 
-  // Prevents two concurrent syncs
+  // Prevents two concurrent history syncs
   bool _syncInProgress = false;
 
   final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
@@ -94,35 +96,26 @@ class TrackerService extends ChangeNotifier {
   }
 
   // ── App lifecycle callbacks ──────────────────────────────
-  // Called by AppLifecycleObserver in main.dart.
-
-  /// App moved to foreground: reconnect WS + sync any history missed.
   Future<void> onAppForeground() async {
     debugPrint('[Tracker] App foreground → syncing missed history');
-    // Trigger immediate WorkManager one-shot (catches background events)
     await BackgroundService.syncNow();
-    // Also do an in-process sync for immediate UI update
     await syncHistoryFromBridge();
   }
 
-  /// App moved to background: WS will be disconnected by BridgeService.
   void onAppBackground() {
     debugPrint('[Tracker] App background → WorkManager takes over');
-    // Nothing to do here — BridgeService handles WS teardown.
-    // WorkManager is already scheduled.
   }
 
   // ── Bridge history sync (foreground, in-process) ──────────
-  //
-  // Fetches the 3-day history from the bridge via HTTP and merges
-  // any missing events into local SQLite. Called on app resume so
-  // the UI reflects everything that happened in the background.
   Future<void> syncHistoryFromBridge() async {
     if (_bridge == null || _contacts.isEmpty || _syncInProgress) return;
     _syncInProgress = true;
 
     try {
       final ids = _contacts.where((c) => c.isTracking).map((c) => c.id).toList();
+
+      // FIX 3: guard moved inside try so finally always runs,
+      // preventing _syncInProgress from leaking on early return.
       if (ids.isEmpty) return;
 
       final historyMap = await _bridge!.getHistoryBulk(ids);
@@ -137,38 +130,48 @@ class TrackerService extends ChangeNotifier {
         DateTime? sessionStart;
 
         for (final e in allEvents) {
-          final timestamp = DateTime.fromMillisecondsSinceEpoch(e.ts);
+          // ts = bridge wall-clock recording time (varies per delivery)
+          // lastSeen = WhatsApp authoritative timestamp (stable across deliveries)
+          final tsTimestamp = DateTime.fromMillisecondsSinceEpoch(e.ts);
 
           if (e.isOnline) {
-            sessionStart = timestamp;
-            if (await _db.hasEventNearTime(contactId, timestamp, StatusType.online)) {
-              continue;
-            }
+            sessionStart = tsTimestamp;
+
+            if (await _db.hasEventNearTime(contactId, tsTimestamp, StatusType.online)) continue;
+
             await _db.insertStatusEvent(
               StatusEvent(
                 id: 'bridge_${contactId}_${e.ts}',
                 contactId: contactId,
                 status: StatusType.online,
+                timestamp: tsTimestamp,
                 exactLastSeen: null,
-                timestamp: timestamp,
               ),
             );
             inserted++;
           } else if (e.isOffline) {
-            // use lastSeen time if it is offline event
-            final exactLastSeen = DateTime.fromMillisecondsSinceEpoch(e.lastSeen ?? e.ts);
-            final duration = sessionStart != null ? timestamp.difference(sessionStart).inSeconds : null;
+            // FIX 2: use lastSeen as the canonical identity for offline dedup,
+            // not ts. Two deliveries of the same offline event (WS + history-sync)
+            // have identical lastSeen but different ts values — ts-based dedup
+            // would miss the duplicate when the gap exceeds the window.
+            final lastSeenMs = e.lastSeen ?? e.ts;
+            final exactLastSeen = DateTime.fromMillisecondsSinceEpoch(lastSeenMs);
+
+            // FIX 5: session duration = lastSeen − sessionStart, not now − sessionStart.
+            // For reconciliation calls lastSeen may be minutes in the past; using
+            // DateTime.now() would produce a wildly inflated duration.
+            final duration = sessionStart != null ? exactLastSeen.difference(sessionStart).inSeconds : null;
             sessionStart = null;
 
-            if (await _db.hasEventNearTime(contactId, timestamp, StatusType.offline)) {
-              continue;
-            }
+            // Dedup by exactLastSeen (passed as the timestamp to compare)
+            if (await _db.hasEventNearTime(contactId, exactLastSeen, StatusType.offline)) continue;
+
             await _db.insertStatusEvent(
               StatusEvent(
                 id: 'bridge_${contactId}_${e.ts}',
                 contactId: contactId,
                 status: StatusType.offline,
-                timestamp: timestamp,
+                timestamp: tsTimestamp,
                 exactLastSeen: exactLastSeen,
                 durationSeconds: duration,
               ),
@@ -181,7 +184,6 @@ class TrackerService extends ChangeNotifier {
       debugPrint('[Tracker] Foreground sync — $inserted new events');
 
       if (inserted > 0) {
-        // Reconcile contacts still marked online whose latest event is offline
         for (final contact in [..._contacts]) {
           if (!contact.isCurrentlyOnline) continue;
           final latest = await _db.getMostRecentEvent(contact.id);
@@ -195,16 +197,12 @@ class TrackerService extends ChangeNotifier {
     } catch (e, stack) {
       debugPrint('[Tracker] Sync error: $e\n$stack');
     } finally {
+      // FIX 3: always released, even on early return or exception
       _syncInProgress = false;
     }
   }
 
   // ── Handle real-time presence event from WS ───────────────
-  //
-  // The bridge now broadcasts ALL statuses while the app is foreground:
-  //   available   → mark online, log session start, notify
-  //   unavailable → mark offline, compute session duration
-  //   composing / recording → no DB write (could drive a typing indicator later)
   void _handlePresenceFromBridge(PresenceEvent event) {
     TrackedContact? contact;
 
@@ -227,7 +225,6 @@ class TrackerService extends ChangeNotifier {
     }
 
     handlePresenceEvent(contact.id, isOnline: event.isOnline, lastSeen: event.lastSeen);
-    // composing / recording: skip DB write for now
   }
 
   // ── Contacts CRUD ─────────────────────────────────────────
@@ -310,55 +307,71 @@ class TrackerService extends ChangeNotifier {
   }
 
   // ── Core presence handler ─────────────────────────────────
-  Future<void> handlePresenceEvent(String contactId, {required bool isOnline, DateTime? lastSeen}) async {
+  Future<void> handlePresenceEvent(
+    String contactId, {
+    required bool isOnline,
+    DateTime? lastSeen, // WhatsApp's authoritative offline timestamp
+  }) async {
     final idx = _contacts.indexWhere((c) => c.id == contactId);
     if (idx == -1) return;
 
     final contact = _contacts[idx];
     if (contact.isCurrentlyOnline == isOnline) return;
 
-    final now = DateTime.now();
+    // For online events: record when they came online.
+    // For offline events: compute duration using lastSeen (authoritative) when
+    // available, falling back to now() only for events that have no lastSeen
+    // (should not happen for unavailable, but defensive).
+    final offlineAt = isOnline ? null : (lastSeen ?? DateTime.now());
     int? durationSeconds;
 
     if (!isOnline) {
       final since = _onlineSince[contactId];
-      if (since != null) {
-        durationSeconds = now.difference(since).inSeconds;
+      if (since != null && offlineAt != null) {
+        // FIX 5: use lastSeen (actual offline time) not DateTime.now()
+        durationSeconds = offlineAt.difference(since).inSeconds;
+        // Guard against negative durations from clock skew
+        if (durationSeconds < 0) durationSeconds = 0;
         _onlineSince.remove(contactId);
       }
     } else {
-      _onlineSince[contactId] = now;
+      _onlineSince[contactId] = DateTime.now();
     }
 
     final event = StatusEvent(
       id: _uuid.v4(),
       contactId: contactId,
       status: isOnline ? StatusType.online : StatusType.offline,
-      timestamp: now,
-      exactLastSeen: isOnline ? null : lastSeen,
+      timestamp: DateTime.now(),
+      exactLastSeen: isOnline ? null : offlineAt,
       durationSeconds: durationSeconds,
     );
     await _db.insertStatusEvent(event);
 
     final addMinutes = durationSeconds != null ? (durationSeconds / 60).round() : 0;
+
+    // FIX 4: pass the WhatsApp authoritative lastSeen to updateContactStatus,
+    // not DateTime.now(). Previously the contact's lastSeen in the DB was set
+    // to Flutter's processing time, not when WhatsApp reported them offline.
     await _db.updateContactStatus(
       contactId,
       isOnline: isOnline,
-      lastSeen: isOnline ? null : now,
+      lastSeen: isOnline ? null : offlineAt,
       addToSessions: isOnline ? 1 : 0,
       addToMinutes: addMinutes,
-    
     );
 
     _contacts[idx] = contact.copyWith(
       isCurrentlyOnline: isOnline,
-      lastSeen: isOnline ? contact.lastSeen : now,
+      lastSeen: isOnline ? contact.lastSeen : offlineAt,
       totalSessions: isOnline ? contact.totalSessions + 1 : contact.totalSessions,
       totalOnlineMinutes: contact.totalOnlineMinutes + addMinutes,
     );
     notifyListeners();
 
-    if (_notificationsEnabled && isOnline) _sendOnlineNotification(_contacts[idx]);
+    if (_notificationsEnabled && isOnline) {
+      _sendOnlineNotification(_contacts[idx]);
+    }
   }
 
   Future<void> _sendOnlineNotification(TrackedContact contact) async {
