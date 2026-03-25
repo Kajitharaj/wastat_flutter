@@ -1,323 +1,251 @@
-// lib/services/background_service.dart
-//
-// Runs a foreground service on Android that keeps the WebSocket
-// connection to the bridge alive even when the app is killed.
-//
-// Architecture:
-//   Main isolate  ──► FlutterForegroundTask starts service
-//   Service isolate ──► WS connection ──► receives presence events
-//                    ──► saves to SQLite directly
-//                    ──► fires local notifications
-//
-// The service isolate runs completely independently of the UI.
-// When the user opens the app, it reads from the same SQLite DB
-// and shows all events that happened in the background.
-
-import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter/foundation.dart';
+import 'package:workmanager/workmanager.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/status_event.dart';
 import 'database_service.dart';
 
-// ── Task handler — runs in background isolate ────────────
-// This class is instantiated in the background isolate.
-// It has NO access to the main app's Provider/state — it talks
-// directly to SQLite and sends local notifications.
+// ── Task identifiers ───────────────────────────────────────
+const _kPeriodicUniqueName = 'wastat_periodic_sync';
+const _kOneshotUniqueName = 'wastat_oneshot_sync';
+const _kTaskName = 'wastat.history_sync';
+
+// SharedPreferences keys
+const _kLastSyncMs = 'wastat_last_bg_sync_ms';
+const _kLastNotifyMs = 'wastat_last_notify_ms';
+
+// ── Top-level callback — MUST be a top-level function ─────
+// Runs in a separate isolate. No access to main app state.
 @pragma('vm:entry-point')
-class WaStatTaskHandler extends TaskHandler {
-  WebSocketChannel? _channel;
-  StreamSubscription? _wsSub;
-  Timer? _pingTimer;
-  Timer? _reconnectTimer;
-  int _reconnectAttempts = 0;
+void callbackDispatcher() {
+  Workmanager().executeTask((taskName, inputData) async {
+    debugPrint('[BG] WorkManager fired: $taskName');
 
-  final _db = DatabaseService();
-  final _uuid = const Uuid();
-  final _notifications = FlutterLocalNotificationsPlugin();
-
-  // Per-contact online-since map for session duration tracking
-  final Map<String, DateTime> _onlineSince = {};
-
-  String _bridgeHost = '';
-  String _apiSecret = '';
-
-  @override
-  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    debugPrint('[BG] Background task started');
-    await _initNotifications();
-    await _loadConfig();
-    _connect();
-  }
-
-  @override
-  void onRepeatEvent(DateTime timestamp) {
-    // Called every repeatInterval — use as a watchdog
-    if (_channel == null) {
-      debugPrint('[BG] Watchdog: not connected, reconnecting...');
-      _connect();
+    if (taskName == _kTaskName || taskName == Workmanager.iOSBackgroundTask) {
+      try {
+        await _BackgroundSync.run();
+        return true;
+      } catch (e) {
+        debugPrint('[BG] Sync error: $e');
+        return false; // triggers WorkManager exponential backoff retry
+      }
     }
-  }
 
-  @override
-  @override
-  Future<void> onDestroy(DateTime timestamp, bool isPermanent) async {
-    debugPrint('[BG] Background task destroyed (permanent: $isPermanent)');
-    _pingTimer?.cancel();
-    _reconnectTimer?.cancel();
-    _wsSub?.cancel();
-    _channel?.sink.close();
-  }
+    return true; // unknown task — return success so it isn't retried
+  });
+}
 
-  // ── Init ──────────────────────────────────────────────
-  Future<void> _initNotifications() async {
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const settings = InitializationSettings(android: android);
-    await _notifications.initialize(settings: settings);
-  }
-
-  Future<void> _loadConfig() async {
-    // flutter_secure_storage works across isolates via platform channel
+// ── Background sync logic ─────────────────────────────────
+class _BackgroundSync {
+  static Future<void> run() async {
     const storage = FlutterSecureStorage();
-    _bridgeHost = await storage.read(key: 'bridge_host') ?? '';
-    _apiSecret = await storage.read(key: 'api_secret') ?? '';
-    debugPrint('[BG] Config loaded — host: $_bridgeHost');
-  }
+    final host = await storage.read(key: 'bridge_host') ?? '';
+    final secret = await storage.read(key: 'api_secret') ?? '';
 
-  // ── WebSocket connection ───────────────────────────────
-  void _connect() {
-    if (_bridgeHost.isEmpty || _apiSecret.isEmpty) {
-      debugPrint('[BG] No bridge config — cannot connect');
+    if (host.isEmpty || secret.isEmpty) {
+      debugPrint('[BG] No bridge config — skipping sync');
       return;
     }
 
-    _disconnect();
+    final db = DatabaseService();
+    final contacts = await db.getAllContacts();
+    final tracked = contacts.where((c) => c.isTracking).toList();
+    if (tracked.isEmpty) return;
 
-    try {
-      final wsUrl = _bridgeHost.replaceFirst(RegExp(r'^http'), 'ws').replaceFirst(RegExp(r':\d+$'), ':8080');
+    // ── Fetch 3-day history from bridge ────────────────────
+    final ids = tracked.map((c) => c.id).toList();
+    final res = await http
+        .post(
+          Uri.parse('$host/history/bulk'),
+          headers: {'Content-Type': 'application/json', 'x-api-secret': secret},
+          body: jsonEncode({'contactIds': ids, 'days': 3}),
+        )
+        .timeout(const Duration(seconds: 20));
 
-      debugPrint('[BG] Connecting to $wsUrl');
-      _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
-
-      _wsSub = _channel!.stream.listen(
-        _onMessage,
-        onError: (e) {
-          debugPrint('[BG] WS error: $e');
-          _scheduleReconnect();
-        },
-        onDone: () {
-          debugPrint('[BG] WS closed');
-          _scheduleReconnect();
-        },
-      );
-
-      // Send ping to authenticate + signal our presence
-      _send({'type': 'ping', 'secret': _apiSecret});
-
-      // Re-subscribe all tracked contacts
-      _resubscribeAll();
-
-      // Keep-alive ping every 25s
-      _pingTimer = Timer.periodic(const Duration(seconds: 25), (_) {
-        _send({'type': 'ping', 'secret': _apiSecret});
-      });
-
-      _reconnectAttempts = 0;
-      debugPrint('[BG] Connected successfully');
-    } catch (e) {
-      debugPrint('[BG] Connection failed: $e');
-      _scheduleReconnect();
-    }
-  }
-
-  void _disconnect() {
-    _pingTimer?.cancel();
-    _wsSub?.cancel();
-    _channel?.sink.close();
-    _channel = null;
-  }
-
-  void _scheduleReconnect() {
-    _reconnectTimer?.cancel();
-    final delay = Duration(seconds: (2 << _reconnectAttempts.clamp(0, 6)));
-    _reconnectAttempts++;
-    debugPrint('[BG] Reconnecting in ${delay.inSeconds}s...');
-    _reconnectTimer = Timer(delay, _connect);
-  }
-
-  // ── Subscribe all tracked contacts ────────────────────
-  Future<void> _resubscribeAll() async {
-    final contacts = await _db.getAllContacts();
-    for (final contact in contacts) {
-      if (contact.isTracking) {
-        _send({'type': 'subscribe', 'secret': _apiSecret, 'phone': contact.phoneNumber, 'contactId': contact.id});
-      }
-    }
-    debugPrint('[BG] Resubscribed ${contacts.length} contacts');
-  }
-
-  // ── Handle incoming WS messages ────────────────────────
-  void _onMessage(dynamic raw) {
-    Map<String, dynamic> msg;
-    try {
-      msg = jsonDecode(raw as String) as Map<String, dynamic>;
-    } catch (_) {
+    if (res.statusCode != 200) {
+      debugPrint('[BG] /history/bulk returned ${res.statusCode}');
       return;
     }
 
-    final type = msg['type'] as String?;
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final rawResults = data['results'] as Map<String, dynamic>? ?? {};
 
-    if (type == 'presence') {
-      _handlePresence(msg);
-    }
-    // Ignore pong, bridge_status etc. in background
-  }
+    // ── Timestamps for notification dedup ──────────────────
+    final prefs = await SharedPreferences.getInstance();
+    final lastNotifyMs = prefs.getInt(_kLastNotifyMs) ?? 0;
+    final lastSyncMs = prefs.getInt(_kLastSyncMs) ?? 0;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
 
-  // ── Handle presence event ─────────────────────────────
-  Future<void> _handlePresence(Map<String, dynamic> msg) async {
-    final contactId = msg['contactId'] as String?;
-    final isOnline = msg['isOnline'] as bool? ?? false;
-    final status = msg['status'] as String? ?? '';
+    // ── Init notifications ──────────────────────────────────
+    final notifications = FlutterLocalNotificationsPlugin();
+    await notifications.initialize(
+      settings: const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')),
+    );
 
-    // Only care about available/unavailable
-    if (status != 'available' && status != 'unavailable') return;
-    if (contactId == null) return;
+    int inserted = 0;
+    int notified = 0;
+    int latestEventMs = lastNotifyMs;
+    const uuid = Uuid();
 
-    final contact = await _db.getContact(contactId);
-    if (contact == null) return;
-    if (contact.isCurrentlyOnline == isOnline) return; // no change
+    // ── Process each contact ────────────────────────────────
+    for (final contact in tracked) {
+      final rawDays = rawResults[contact.id] as List<dynamic>? ?? [];
 
-    final now = DateTime.now();
-    int? durationSeconds;
-
-    if (!isOnline) {
-      final since = _onlineSince[contactId];
-      if (since != null) {
-        durationSeconds = now.difference(since).inSeconds;
-        _onlineSince.remove(contactId);
+      // Flatten all events and sort chronologically
+      final allEvents = <Map<String, dynamic>>[];
+      for (final day in rawDays) {
+        for (final e in (day['events'] as List<dynamic>? ?? [])) {
+          allEvents.add(e as Map<String, dynamic>);
+        }
       }
-    } else {
-      _onlineSince[contactId] = now;
+      allEvents.sort((a, b) => (a['ts'] as int).compareTo(b['ts'] as int));
+
+      DateTime? sessionStart;
+
+      for (final e in allEvents) {
+        final statusStr = e['status'] as String;
+        final ts = e['ts'] as int;
+        final timestamp = DateTime.fromMillisecondsSinceEpoch(ts);
+
+        if (statusStr == 'available') {
+          sessionStart = timestamp;
+
+          if (await db.hasEventNearTime(contact.id, timestamp, StatusType.online)) {
+            continue; // already recorded by foreground WS handler
+          }
+
+          await db.insertStatusEvent(
+            StatusEvent(
+              id: 'bridge_${contact.id}_$ts',
+              contactId: contact.id,
+              status: StatusType.online,
+              timestamp: timestamp,
+            ),
+          );
+          inserted++;
+
+          // Notify only for events that are genuinely new since last sync
+          if (ts > lastNotifyMs && ts > lastSyncMs) {
+            await notifications.show(
+              id: contact.id.hashCode,
+              body: '${contact.name} was online',
+              payload: _notifyBody(timestamp),
+              notificationDetails: const NotificationDetails(
+                android: AndroidNotificationDetails(
+                  'wastat_online',
+                  'Online Alerts',
+                  channelDescription: 'Notifies when tracked contacts come online',
+                  importance: Importance.high,
+                  priority: Priority.high,
+                  icon: '@mipmap/ic_launcher',
+                ),
+              ),
+            );
+            notified++;
+            if (ts > latestEventMs) latestEventMs = ts;
+          }
+        } else if (statusStr == 'unavailable') {
+          final duration = sessionStart != null ? timestamp.difference(sessionStart).inSeconds : null;
+          sessionStart = null;
+
+          if (await db.hasEventNearTime(contact.id, timestamp, StatusType.offline)) {
+            continue;
+          }
+
+          await db.insertStatusEvent(
+            StatusEvent(
+              id: 'bridge_${contact.id}_$ts',
+              contactId: contact.id,
+              status: StatusType.offline,
+              timestamp: timestamp,
+              durationSeconds: duration,
+            ),
+          );
+          inserted++;
+
+          // Reconcile DB if the contact is still marked online
+          final dbContact = await db.getContact(contact.id);
+          if (dbContact != null && dbContact.isCurrentlyOnline) {
+            final addMins = duration != null ? (duration / 60).round() : 0;
+            await db.updateContactStatus(contact.id, isOnline: false, lastSeen: timestamp, addToMinutes: addMins);
+            debugPrint('[BG] Reconciled ${contact.name} → offline');
+          }
+        }
+        // composing / recording — skip, not persisted
+      }
     }
 
-    // Persist event to SQLite
-    final event = StatusEvent(
-      id: _uuid.v4(),
-      contactId: contactId,
-      status: isOnline ? StatusType.online : StatusType.offline,
-      timestamp: now,
-      durationSeconds: durationSeconds,
-    );
-    await _db.insertStatusEvent(event);
-
-    final addMinutes = durationSeconds != null ? (durationSeconds / 60).round() : 0;
-
-    await _db.updateContactStatus(
-      contactId,
-      isOnline: isOnline,
-      lastSeen: isOnline ? null : now,
-      addToSessions: isOnline ? 1 : 0,
-      addToMinutes: addMinutes,
-    );
-
-    debugPrint('[BG] ${contact.name} is now ${isOnline ? "ONLINE" : "offline"}');
-
-    // Fire notification when contact comes online
-    if (isOnline) {
-      await _notifications.show(
-        id: contact.hashCode,
-        title: '${contact.name} is online',
-        body: 'Just came online on WhatsApp',
-        notificationDetails: const NotificationDetails(
-          android: AndroidNotificationDetails(
-            'wastat_online',
-            'Online Alerts',
-            channelDescription: 'Notifies when tracked contacts come online',
-            importance: Importance.high,
-            priority: Priority.high,
-            icon: '@mipmap/ic_launcher',
-          ),
-        ),
-      );
+    // ── Persist timestamps ──────────────────────────────────
+    await prefs.setInt(_kLastSyncMs, nowMs);
+    if (latestEventMs > lastNotifyMs) {
+      await prefs.setInt(_kLastNotifyMs, latestEventMs);
     }
+
+    debugPrint('[BG] Sync done — inserted: $inserted, notified: $notified');
   }
 
-  void _send(Map<String, dynamic> msg) {
-    try {
-      _channel?.sink.add(jsonEncode(msg));
-    } catch (_) {}
+  static String _notifyBody(DateTime t) {
+    final diff = DateTime.now().difference(t);
+    if (diff.inMinutes < 2) return 'Just came online on WhatsApp';
+    if (diff.inMinutes < 60) return 'Was online ${diff.inMinutes}m ago on WhatsApp';
+    if (diff.inHours < 24) return 'Was online ${diff.inHours}h ago on WhatsApp';
+    return 'Was online on WhatsApp';
   }
 }
 
-// ── Main isolate API ──────────────────────────────────────
-// Called from the UI to start/stop the foreground service.
+// ── Public API (main isolate) ─────────────────────────────
 class BackgroundService {
-  // Initialize ForegroundTask config — call once in main()
-  static void initialize() {
-    FlutterForegroundTask.init(
-      androidNotificationOptions: AndroidNotificationOptions(
-        channelId: 'wastat_tracking',
-        channelName: 'WaStat Tracking',
-        channelDescription: 'Keeps WhatsApp status tracking running in background',
-        channelImportance: NotificationChannelImportance.LOW,
-        priority: NotificationPriority.LOW,
-      ),
-      iosNotificationOptions: const IOSNotificationOptions(showNotification: true, playSound: false),
-      foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(
-          60000, // watchdog every 60s
-        ),
-        autoRunOnBoot: true, // restart after phone reboot
-        autoRunOnMyPackageReplaced: true,
-        allowWakeLock: true,
-        allowWifiLock: true,
-      ),
+  /// Call once in main(), before runApp().
+  /// Registers the callbackDispatcher with WorkManager.
+  static Future<void> initialize() async {
+    await Workmanager().initialize(
+      callbackDispatcher,
+      // isInDebugMode is deprecated in 0.9.0 — use WorkmanagerDebug instead.
+      // Leave it out; debug hooks can be set up separately if needed.
     );
   }
 
-  // Start the foreground service
-  static Future<bool> start() async {
-    // Request permissions first
-    final permResult = await FlutterForegroundTask.requestIgnoreBatteryOptimization();
-    debugPrint('[BGService] Battery opt ignored: $permResult');
-
-    if (await FlutterForegroundTask.isRunningService) {
-      debugPrint('[BGService] Already running');
-      return true;
-    }
-
-    final result = await FlutterForegroundTask.startService(
-      serviceId: 1001,
-      notificationTitle: 'WaStat is tracking',
-      notificationText: 'Monitoring WhatsApp online status',
-      callback: startCallback,
+  /// Register (or replace) the 15-minute periodic sync task.
+  static Future<void> start() async {
+    await Workmanager().registerPeriodicTask(
+      _kPeriodicUniqueName,
+      _kTaskName,
+      frequency: const Duration(minutes: 15), // Android minimum
+      constraints: Constraints(networkType: NetworkType.connected, requiresBatteryNotLow: true),
+      // 0.9.0 uses ExistingPeriodicWorkPolicy (not ExistingWorkPolicy)
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+      backoffPolicy: BackoffPolicy.exponential,
+      backoffPolicyDelay: const Duration(minutes: 5),
     );
-
-    debugPrint('[BGService] Start result: $result');
-    return ServiceRequestResult is ServiceRequestSuccess;
+    debugPrint('[BGService] Periodic task registered (15 min)');
   }
 
-  // Stop the foreground service
+  /// Cancel the periodic task (call when user stops tracking or logs out).
   static Future<void> stop() async {
-    await FlutterForegroundTask.stopService();
-    debugPrint('[BGService] Stopped');
+    await Workmanager().cancelByUniqueName(_kPeriodicUniqueName);
+    await Workmanager().cancelByUniqueName(_kOneshotUniqueName);
+    debugPrint('[BGService] Tasks cancelled');
   }
 
-  // Update notification text (e.g. "3 contacts online")
-  static Future<void> updateNotification(String text) async {
-    await FlutterForegroundTask.updateService(notificationTitle: 'WaStat is tracking', notificationText: text);
+  /// Trigger an immediate one-shot sync — e.g. on app resume.
+  /// Does not affect the periodic schedule.
+  static Future<void> syncNow() async {
+    await Workmanager().registerOneOffTask(
+      _kOneshotUniqueName,
+      _kTaskName,
+      constraints: Constraints(networkType: NetworkType.connected),
+      existingWorkPolicy: ExistingWorkPolicy.replace,
+    );
+    debugPrint('[BGService] One-shot sync queued');
   }
 
-  static Future<bool> get isRunning => FlutterForegroundTask.isRunningService;
-}
-
-// ── Entry point for background isolate ────────────────────
-// Must be a top-level function annotated with @pragma
-@pragma('vm:entry-point')
-void startCallback() {
-  FlutterForegroundTask.setTaskHandler(WaStatTaskHandler());
+  /// True if a sync has ever completed (used to show status in Settings UI).
+  static Future<bool> get isRunning async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.containsKey(_kLastSyncMs);
+  }
 }

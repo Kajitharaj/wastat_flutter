@@ -1,7 +1,10 @@
 // lib/services/tracker_service.dart
 //
-// Core tracking service. Bridges real WhatsApp presence events
-// from the Node.js bridge into local SQLite logs + UI state.
+// Core tracking service.
+//
+// Foreground: WebSocket delivers ONLINE events → logged immediately.
+// Background: WorkManager polls bridge history → writes to SQLite.
+// On app resume: one-shot history sync catches anything missed while backgrounded.
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -21,19 +24,19 @@ class TrackerService extends ChangeNotifier {
   bool _isRunning = false;
   bool _notificationsEnabled = true;
 
-  // Per-contact online-since tracking (for session duration)
   final Map<String, DateTime> _onlineSince = {};
 
-  // Bridge subscription
   BridgeService? _bridge;
   StreamSubscription<PresenceEvent>? _presenceSub;
+
+  // Prevents two concurrent syncs
+  bool _syncInProgress = false;
 
   final FlutterLocalNotificationsPlugin _notifications = FlutterLocalNotificationsPlugin();
 
   List<TrackedContact> get contacts => List.unmodifiable(_contacts);
   bool get isRunning => _isRunning;
   bool get notificationsEnabled => _notificationsEnabled;
-
   int get onlineCount => _contacts.where((c) => c.isCurrentlyOnline).length;
   int get trackedCount => _contacts.where((c) => c.isTracking).length;
 
@@ -41,10 +44,7 @@ class TrackerService extends ChangeNotifier {
   Future<void> initialize({BridgeService? bridge}) async {
     await _initNotifications();
     await loadContacts();
-
-    if (bridge != null) {
-      attachBridge(bridge);
-    }
+    if (bridge != null) attachBridge(bridge);
   }
 
   Future<void> _initNotifications() async {
@@ -54,19 +54,14 @@ class TrackerService extends ChangeNotifier {
     await _notifications.initialize(settings: settings);
   }
 
-  // ── Bridge attachment ────────────────────────────────────
+  // ── Bridge attachment ─────────────────────────────────────
   void attachBridge(BridgeService bridge) {
     _presenceSub?.cancel();
     _bridge?.removeListener(_onBridgeStateChanged);
     _bridge = bridge;
-
-    // Listen to real-time presence events
     _presenceSub = bridge.presenceStream.listen(_handlePresenceFromBridge);
-
-    // Listen for WhatsApp auth state changes (QR scan, logout)
     bridge.addListener(_onBridgeStateChanged);
 
-    // If WhatsApp is already authenticated right now, start immediately
     if (bridge.waState == WhatsAppState.connected) {
       _isRunning = true;
       _subscribeAllToBridge();
@@ -74,16 +69,16 @@ class TrackerService extends ChangeNotifier {
     }
   }
 
-  // Called whenever BridgeService notifies (waState changed, etc.)
   void _onBridgeStateChanged() {
     if (_bridge == null) return;
+
     if (_bridge!.waState == WhatsAppState.connected && !_isRunning) {
-      debugPrint('[Tracker] WhatsApp connected → auto-starting tracking');
+      debugPrint('[Tracker] WhatsApp connected → starting tracking');
       _isRunning = true;
       _subscribeAllToBridge();
       notifyListeners();
     } else if (_bridge!.waState == WhatsAppState.disconnected && _isRunning) {
-      debugPrint('[Tracker] WhatsApp disconnected → pausing tracking');
+      debugPrint('[Tracker] WhatsApp disconnected → pausing');
       _isRunning = false;
       notifyListeners();
     }
@@ -91,57 +86,147 @@ class TrackerService extends ChangeNotifier {
 
   void _subscribeAllToBridge() {
     if (_bridge == null) return;
-    debugPrint('[Tracker] Subscribing ${_contacts.length} contacts to bridge');
     for (final c in _contacts) {
       if (c.isTracking) {
-        debugPrint('[Tracker] → subscribing ' + c.name + ' (' + c.phoneNumber + ')');
         _bridge!.subscribePresence(c.phoneNumber, contactId: c.id);
       }
     }
   }
 
-  // ── Handle real presence event from bridge ────────────────
-  void _handlePresenceFromBridge(PresenceEvent event) {
-    debugPrint(
-      '[Tracker] Presence received — contactId: ${event.contactId}, isOnline: ${event.isOnline}, status: ${event.status}',
-    );
-    debugPrint('[Tracker] Known contacts: ${_contacts.map((c) => c.id + ':' + c.name).join(', ')}');
+  // ── App lifecycle callbacks ──────────────────────────────
+  // Called by AppLifecycleObserver in main.dart.
 
+  /// App moved to foreground: reconnect WS + sync any history missed.
+  Future<void> onAppForeground() async {
+    debugPrint('[Tracker] App foreground → syncing missed history');
+    // Trigger immediate WorkManager one-shot (catches background events)
+    await BackgroundService.syncNow();
+    // Also do an in-process sync for immediate UI update
+    await syncHistoryFromBridge();
+  }
+
+  /// App moved to background: WS will be disconnected by BridgeService.
+  void onAppBackground() {
+    debugPrint('[Tracker] App background → WorkManager takes over');
+    // Nothing to do here — BridgeService handles WS teardown.
+    // WorkManager is already scheduled.
+  }
+
+  // ── Bridge history sync (foreground, in-process) ──────────
+  //
+  // Fetches the 3-day history from the bridge via HTTP and merges
+  // any missing events into local SQLite. Called on app resume so
+  // the UI reflects everything that happened in the background.
+  Future<void> syncHistoryFromBridge() async {
+    if (_bridge == null || _contacts.isEmpty || _syncInProgress) return;
+    _syncInProgress = true;
+
+    try {
+      final ids = _contacts.where((c) => c.isTracking).map((c) => c.id).toList();
+      if (ids.isEmpty) return;
+
+      final historyMap = await _bridge!.getHistoryBulk(ids);
+      if (historyMap == null || historyMap.isEmpty) return;
+
+      int inserted = 0;
+
+      for (final entry in historyMap.entries) {
+        final contactId = entry.key;
+        final allEvents = entry.value.expand((d) => d.events).toList()..sort((a, b) => a.ts.compareTo(b.ts));
+
+        DateTime? sessionStart;
+
+        for (final e in allEvents) {
+          final timestamp = DateTime.fromMillisecondsSinceEpoch(e.ts);
+
+          if (e.isOnline) {
+            sessionStart = timestamp;
+            if (await _db.hasEventNearTime(contactId, timestamp, StatusType.online)) {
+              continue;
+            }
+            await _db.insertStatusEvent(
+              StatusEvent(
+                id: 'bridge_${contactId}_${e.ts}',
+                contactId: contactId,
+                status: StatusType.online,
+                timestamp: timestamp,
+              ),
+            );
+            inserted++;
+          } else if (e.isOffline) {
+            final duration = sessionStart != null ? timestamp.difference(sessionStart).inSeconds : null;
+            sessionStart = null;
+
+            if (await _db.hasEventNearTime(contactId, timestamp, StatusType.offline)) {
+              continue;
+            }
+            await _db.insertStatusEvent(
+              StatusEvent(
+                id: 'bridge_${contactId}_${e.ts}',
+                contactId: contactId,
+                status: StatusType.offline,
+                timestamp: timestamp,
+                durationSeconds: duration,
+              ),
+            );
+            inserted++;
+          }
+        }
+      }
+
+      debugPrint('[Tracker] Foreground sync — $inserted new events');
+
+      if (inserted > 0) {
+        // Reconcile contacts still marked online whose latest event is offline
+        for (final contact in [..._contacts]) {
+          if (!contact.isCurrentlyOnline) continue;
+          final latest = await _db.getMostRecentEvent(contact.id);
+          if (latest != null && latest.status == StatusType.offline) {
+            debugPrint('[Tracker] Reconciling ${contact.name} → offline');
+            await handlePresenceEvent(contact.id, isOnline: false);
+          }
+        }
+        await loadContacts();
+      }
+    } catch (e, stack) {
+      debugPrint('[Tracker] Sync error: $e\n$stack');
+    } finally {
+      _syncInProgress = false;
+    }
+  }
+
+  // ── Handle real-time presence event from WS ───────────────
+  //
+  // The bridge now broadcasts ALL statuses while the app is foreground:
+  //   available   → mark online, log session start, notify
+  //   unavailable → mark offline, compute session duration
+  //   composing / recording → no DB write (could drive a typing indicator later)
+  void _handlePresenceFromBridge(PresenceEvent event) {
     TrackedContact? contact;
 
-    // 1. Match by contactId (UUID set by the bridge from our subscription)
     if (event.contactId != null) {
       try {
         contact = _contacts.firstWhere((c) => c.id == event.contactId);
-        debugPrint('[Tracker] Matched by contactId: ${contact.name}');
-      } catch (_) {
-        debugPrint('[Tracker] contactId ${event.contactId} not found in local contacts');
-      }
+      } catch (_) {}
     }
 
-    // 2. Fallback: match by phone digits
-    // Note: event.phone may be LID digits on new WhatsApp — contactId match above is preferred
     if (contact == null) {
       final phone = event.phone.replaceAll(RegExp(r'\D'), '');
-      debugPrint('[Tracker] Trying phone fallback with digits: $phone');
       try {
         contact = _contacts.firstWhere((c) => c.phoneNumber.replaceAll(RegExp(r'\D'), '') == phone);
-        debugPrint('[Tracker] Matched by phone: ${contact.name}');
-      } catch (_) {
-        debugPrint('[Tracker] No phone match for $phone');
-      }
+      } catch (_) {}
     }
 
     if (contact == null) {
-      debugPrint('[Tracker] No contact found — dropping presence event');
+      debugPrint('[Tracker] No match for presence event — dropping');
       return;
     }
 
-    debugPrint('[Tracker] Dispatching presence for ${contact.name} — isOnline: ${event.isOnline}');
     handlePresenceEvent(contact.id, isOnline: event.isOnline);
+    // composing / recording: skip DB write for now
   }
 
-  // ── Contacts ─────────────────────────────────────────────
+  // ── Contacts CRUD ─────────────────────────────────────────
   Future<void> loadContacts() async {
     _contacts = await _db.getAllContacts();
     notifyListeners();
@@ -159,12 +244,9 @@ class TrackerService extends ChangeNotifier {
     _contacts.insert(0, contact);
     notifyListeners();
 
-    // Subscribe to bridge if WhatsApp is connected
-    // (regardless of _isRunning — bridge connection is the source of truth)
     if (_bridge != null && _bridge!.waState == WhatsAppState.connected) {
       _bridge!.subscribePresence(contact.phoneNumber, contactId: contact.id);
     }
-
     return contact;
   }
 
@@ -212,9 +294,7 @@ class TrackerService extends ChangeNotifier {
   void stopTracking() {
     _isRunning = false;
     if (_bridge != null) {
-      for (final c in _contacts) {
-        _bridge!.unsubscribePresence(c.phoneNumber);
-      }
+      for (final c in _contacts) _bridge!.unsubscribePresence(c.phoneNumber);
     }
     BackgroundService.stop();
     notifyListeners();
@@ -231,7 +311,7 @@ class TrackerService extends ChangeNotifier {
     if (idx == -1) return;
 
     final contact = _contacts[idx];
-    if (contact.isCurrentlyOnline == isOnline) return; // no change
+    if (contact.isCurrentlyOnline == isOnline) return;
 
     final now = DateTime.now();
     int? durationSeconds;
@@ -246,7 +326,6 @@ class TrackerService extends ChangeNotifier {
       _onlineSince[contactId] = now;
     }
 
-    // Persist event
     final event = StatusEvent(
       id: _uuid.v4(),
       contactId: contactId,
@@ -256,7 +335,6 @@ class TrackerService extends ChangeNotifier {
     );
     await _db.insertStatusEvent(event);
 
-    // Update stats
     final addMinutes = durationSeconds != null ? (durationSeconds / 60).round() : 0;
     await _db.updateContactStatus(
       contactId,
@@ -266,18 +344,15 @@ class TrackerService extends ChangeNotifier {
       addToMinutes: addMinutes,
     );
 
-    final updated = contact.copyWith(
+    _contacts[idx] = contact.copyWith(
       isCurrentlyOnline: isOnline,
       lastSeen: isOnline ? contact.lastSeen : now,
       totalSessions: isOnline ? contact.totalSessions + 1 : contact.totalSessions,
       totalOnlineMinutes: contact.totalOnlineMinutes + addMinutes,
     );
-    _contacts[idx] = updated;
     notifyListeners();
 
-    if (_notificationsEnabled && isOnline) {
-      _sendOnlineNotification(updated);
-    }
+    if (_notificationsEnabled && isOnline) _sendOnlineNotification(_contacts[idx]);
   }
 
   Future<void> _sendOnlineNotification(TrackedContact contact) async {
