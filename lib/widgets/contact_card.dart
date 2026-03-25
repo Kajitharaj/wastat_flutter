@@ -1,27 +1,44 @@
 // lib/widgets/contact_card.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/contact.dart';
 import '../theme/app_theme.dart';
 
-class ContactCard extends StatelessWidget {
+class ContactCard extends StatefulWidget {
   final TrackedContact contact;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
-  const ContactCard({
-    super.key,
-    required this.contact,
-    required this.onTap,
-    this.onLongPress,
-  });
+  const ContactCard({super.key, required this.contact, required this.onTap, this.onLongPress});
+
+  @override
+  State<ContactCard> createState() => _ContactCardState();
+}
+
+class _ContactCardState extends State<ContactCard> {
+  late Timer _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
         splashColor: AppTheme.primaryGreen.withOpacity(0.05),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -46,12 +63,8 @@ class ContactCard extends StatelessWidget {
           radius: 26,
           backgroundColor: _avatarBgColor,
           child: Text(
-            contact.initials,
-            style: TextStyle(
-              color: _avatarTextColor,
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-            ),
+            widget.contact.initials,
+            style: TextStyle(color: _avatarTextColor, fontSize: 15, fontWeight: FontWeight.w700),
           ),
         ),
         // Online indicator dot
@@ -63,19 +76,11 @@ class ContactCard extends StatelessWidget {
             width: 13,
             height: 13,
             decoration: BoxDecoration(
-              color: contact.isCurrentlyOnline
-                  ? AppTheme.onlineColor
-                  : AppTheme.bgElevated,
+              color: widget.contact.isCurrentlyOnline ? AppTheme.onlineColor : AppTheme.bgElevated,
               shape: BoxShape.circle,
               border: Border.all(color: AppTheme.bgPrimary, width: 2),
-              boxShadow: contact.isCurrentlyOnline
-                  ? [
-                      BoxShadow(
-                        color: AppTheme.onlineColor.withOpacity(0.5),
-                        blurRadius: 4,
-                        spreadRadius: 1,
-                      )
-                    ]
+              boxShadow: widget.contact.isCurrentlyOnline
+                  ? [BoxShadow(color: AppTheme.onlineColor.withOpacity(0.5), blurRadius: 4, spreadRadius: 1)]
                   : null,
             ),
           ),
@@ -91,21 +96,14 @@ class ContactCard extends StatelessWidget {
         Row(
           children: [
             Text(
-              contact.name,
-              style: const TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-              ),
+              widget.contact.name,
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15, fontWeight: FontWeight.w600),
             ),
             const SizedBox(width: 6),
-            if (!contact.isTracking)
+            if (!widget.contact.isTracking)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                decoration: BoxDecoration(
-                  color: AppTheme.bgElevated,
-                  borderRadius: BorderRadius.circular(4),
-                ),
+                decoration: BoxDecoration(color: AppTheme.bgElevated, borderRadius: BorderRadius.circular(4)),
                 child: const Text(
                   'PAUSED',
                   style: TextStyle(
@@ -119,33 +117,22 @@ class ContactCard extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 3),
-        Text(
-          contact.phoneNumber,
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-        ),
+        Text(widget.contact.phoneNumber, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
         const SizedBox(height: 4),
         Row(
           children: [
             Icon(
-              contact.isCurrentlyOnline
-                  ? Icons.circle
-                  : Icons.access_time_outlined,
+              widget.contact.isCurrentlyOnline ? Icons.circle : Icons.access_time_outlined,
               size: 11,
-              color: contact.isCurrentlyOnline
-                  ? AppTheme.onlineColor
-                  : AppTheme.textTertiary,
+              color: widget.contact.isCurrentlyOnline ? AppTheme.onlineColor : AppTheme.textTertiary,
             ),
             const SizedBox(width: 4),
             Text(
-              contact.isCurrentlyOnline ? 'Online now' : contact.formattedLastSeen,
+              widget.contact.isCurrentlyOnline ? 'Online now' : widget.contact.formattedLastSeen,
               style: TextStyle(
-                color: contact.isCurrentlyOnline
-                    ? AppTheme.onlineColor
-                    : AppTheme.textTertiary,
+                color: widget.contact.isCurrentlyOnline ? AppTheme.onlineColor : AppTheme.textTertiary,
                 fontSize: 11,
-                fontWeight: contact.isCurrentlyOnline
-                    ? FontWeight.w600
-                    : FontWeight.normal,
+                fontWeight: widget.contact.isCurrentlyOnline ? FontWeight.w600 : FontWeight.normal,
               ),
             ),
           ],
@@ -161,22 +148,12 @@ class ContactCard extends StatelessWidget {
       children: [
         // Sessions count
         Text(
-          '${contact.totalSessions}',
-          style: const TextStyle(
-            color: AppTheme.primaryGreen,
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-          ),
+          '${widget.contact.totalSessions}',
+          style: const TextStyle(color: AppTheme.primaryGreen, fontSize: 18, fontWeight: FontWeight.w700),
         ),
-        const Text(
-          'sessions',
-          style: TextStyle(color: AppTheme.textTertiary, fontSize: 10),
-        ),
+        const Text('sessions', style: TextStyle(color: AppTheme.textTertiary, fontSize: 10)),
         const SizedBox(height: 4),
-        Text(
-          contact.formattedTotalTime,
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
-        ),
+        Text(widget.contact.formattedTotalTime, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
       ],
     );
   }
@@ -193,7 +170,7 @@ class ContactCard extends StatelessWidget {
       const Color(0xFF4A235A),
       const Color(0xFF1A237E).withOpacity(0.8),
     ];
-    return colors[contact.name.codeUnitAt(0) % colors.length];
+    return colors[widget.contact.name.codeUnitAt(0) % colors.length];
   }
 
   Color get _avatarTextColor {
