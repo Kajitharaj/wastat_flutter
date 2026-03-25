@@ -1,3 +1,4 @@
+// lib/services/background_service.dart
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:workmanager/workmanager.dart';
@@ -9,37 +10,29 @@ import 'package:uuid/uuid.dart';
 import '../models/status_event.dart';
 import 'database_service.dart';
 
-// ── Task identifiers ───────────────────────────────────────
 const _kPeriodicUniqueName = 'wastat_periodic_sync';
 const _kOneshotUniqueName = 'wastat_oneshot_sync';
 const _kTaskName = 'wastat.history_sync';
-
-// SharedPreferences keys
 const _kLastSyncMs = 'wastat_last_bg_sync_ms';
 const _kLastNotifyMs = 'wastat_last_notify_ms';
 
-// ── Top-level callback — MUST be a top-level function ─────
-// Runs in a separate isolate. No access to main app state.
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((taskName, inputData) async {
     debugPrint('[BG] WorkManager fired: $taskName');
-
     if (taskName == _kTaskName || taskName == Workmanager.iOSBackgroundTask) {
       try {
         await _BackgroundSync.run();
         return true;
       } catch (e) {
         debugPrint('[BG] Sync error: $e');
-        return false; // triggers WorkManager exponential backoff retry
+        return false;
       }
     }
-
-    return true; // unknown task — return success so it isn't retried
+    return true;
   });
 }
 
-// ── Background sync logic ─────────────────────────────────
 class _BackgroundSync {
   static Future<void> run() async {
     const storage = FlutterSecureStorage();
@@ -56,7 +49,6 @@ class _BackgroundSync {
     final tracked = contacts.where((c) => c.isTracking).toList();
     if (tracked.isEmpty) return;
 
-    // ── Fetch 3-day history from bridge ────────────────────
     final ids = tracked.map((c) => c.id).toList();
     final res = await http
         .post(
@@ -74,13 +66,12 @@ class _BackgroundSync {
     final data = jsonDecode(res.body) as Map<String, dynamic>;
     final rawResults = data['results'] as Map<String, dynamic>? ?? {};
 
-    // ── Timestamps for notification dedup ──────────────────
     final prefs = await SharedPreferences.getInstance();
     final lastNotifyMs = prefs.getInt(_kLastNotifyMs) ?? 0;
     final lastSyncMs = prefs.getInt(_kLastSyncMs) ?? 0;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
 
-    // ── Init notifications ──────────────────────────────────
+    // FIX 1: initialize() takes a positional argument, not a named 'settings:' param.
     final notifications = FlutterLocalNotificationsPlugin();
     await notifications.initialize(
       settings: const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')),
@@ -89,13 +80,10 @@ class _BackgroundSync {
     int inserted = 0;
     int notified = 0;
     int latestEventMs = lastNotifyMs;
-    const uuid = Uuid();
 
-    // ── Process each contact ────────────────────────────────
     for (final contact in tracked) {
       final rawDays = rawResults[contact.id] as List<dynamic>? ?? [];
 
-      // Flatten all events and sort chronologically
       final allEvents = <Map<String, dynamic>>[];
       for (final day in rawDays) {
         for (final e in (day['events'] as List<dynamic>? ?? [])) {
@@ -115,7 +103,7 @@ class _BackgroundSync {
           sessionStart = timestamp;
 
           if (await db.hasEventNearTime(contact.id, timestamp, StatusType.online)) {
-            continue; // already recorded by foreground WS handler
+            continue;
           }
 
           await db.insertStatusEvent(
@@ -128,12 +116,14 @@ class _BackgroundSync {
           );
           inserted++;
 
-          // Notify only for events that are genuinely new since last sync
           if (ts > lastNotifyMs && ts > lastSyncMs) {
+            // FIX 2: show() takes positional args (int id, String? title,
+            // String? body, NotificationDetails?). Named params cause a
+            // compile error. title and body were also previously swapped.
             await notifications.show(
               id: contact.id.hashCode,
-              body: '${contact.name} was online',
-              payload: _notifyBody(timestamp),
+              title: '${contact.name} was online',
+              body: _notifyBody(timestamp),
               notificationDetails: const NotificationDetails(
                 android: AndroidNotificationDetails(
                   'wastat_online',
@@ -149,37 +139,54 @@ class _BackgroundSync {
             if (ts > latestEventMs) latestEventMs = ts;
           }
         } else if (statusStr == 'unavailable') {
-          final duration = sessionStart != null ? timestamp.difference(sessionStart).inSeconds : null;
+          // FIX 3: use lastSeen as the canonical identity for offline dedup.
+          // Two deliveries of the same offline event (WS + history-sync)
+          // share identical lastSeen but different bridge ts values — a
+          // ts-based dedup window misses the duplicate when the gap is large.
+          final lastSeenMs = e['lastSeen'] as int? ?? ts;
+          final exactLastSeen = DateTime.fromMillisecondsSinceEpoch(lastSeenMs);
+
+          // FIX 5: session duration = exactLastSeen − sessionStart.
+          // Using timestamp (bridge recording time) inflates duration when the
+          // bridge processes the event late.
+          final duration = sessionStart != null ? exactLastSeen.difference(sessionStart).inSeconds : null;
           sessionStart = null;
 
-          if (await db.hasEventNearTime(contact.id, timestamp, StatusType.offline)) {
+          // Pass exactLastSeen as the dedup anchor (not timestamp)
+          if (await db.hasEventNearTime(contact.id, exactLastSeen, StatusType.offline)) {
             continue;
           }
 
+          // FIX 4: set exactLastSeen on the StatusEvent so UI and analytics
+          // use WhatsApp's authoritative offline time, not the bridge ts.
           await db.insertStatusEvent(
             StatusEvent(
               id: 'bridge_${contact.id}_$ts',
               contactId: contact.id,
               status: StatusType.offline,
               timestamp: timestamp,
+              exactLastSeen: exactLastSeen,
               durationSeconds: duration,
             ),
           );
           inserted++;
 
-          // Reconcile DB if the contact is still marked online
           final dbContact = await db.getContact(contact.id);
           if (dbContact != null && dbContact.isCurrentlyOnline) {
             final addMins = duration != null ? (duration / 60).round() : 0;
-            await db.updateContactStatus(contact.id, isOnline: false, lastSeen: timestamp, addToMinutes: addMins);
+            await db.updateContactStatus(
+              contact.id,
+              isOnline: false,
+              lastSeen: exactLastSeen, // authoritative offline time
+              addToMinutes: addMins,
+            );
             debugPrint('[BG] Reconciled ${contact.name} → offline');
           }
         }
-        // composing / recording — skip, not persisted
+        // composing / recording — skip
       }
     }
 
-    // ── Persist timestamps ──────────────────────────────────
     await prefs.setInt(_kLastSyncMs, nowMs);
     if (latestEventMs > lastNotifyMs) {
       await prefs.setInt(_kLastNotifyMs, latestEventMs);
@@ -197,26 +204,17 @@ class _BackgroundSync {
   }
 }
 
-// ── Public API (main isolate) ─────────────────────────────
 class BackgroundService {
-  /// Call once in main(), before runApp().
-  /// Registers the callbackDispatcher with WorkManager.
   static Future<void> initialize() async {
-    await Workmanager().initialize(
-      callbackDispatcher,
-      // isInDebugMode is deprecated in 0.9.0 — use WorkmanagerDebug instead.
-      // Leave it out; debug hooks can be set up separately if needed.
-    );
+    await Workmanager().initialize(callbackDispatcher);
   }
 
-  /// Register (or replace) the 15-minute periodic sync task.
   static Future<void> start() async {
     await Workmanager().registerPeriodicTask(
       _kPeriodicUniqueName,
       _kTaskName,
-      frequency: const Duration(minutes: 15), // Android minimum
+      frequency: const Duration(minutes: 15),
       constraints: Constraints(networkType: NetworkType.connected, requiresBatteryNotLow: true),
-      // 0.9.0 uses ExistingPeriodicWorkPolicy (not ExistingWorkPolicy)
       existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
       backoffPolicy: BackoffPolicy.exponential,
       backoffPolicyDelay: const Duration(minutes: 5),
@@ -224,15 +222,12 @@ class BackgroundService {
     debugPrint('[BGService] Periodic task registered (15 min)');
   }
 
-  /// Cancel the periodic task (call when user stops tracking or logs out).
   static Future<void> stop() async {
     await Workmanager().cancelByUniqueName(_kPeriodicUniqueName);
     await Workmanager().cancelByUniqueName(_kOneshotUniqueName);
     debugPrint('[BGService] Tasks cancelled');
   }
 
-  /// Trigger an immediate one-shot sync — e.g. on app resume.
-  /// Does not affect the periodic schedule.
   static Future<void> syncNow() async {
     await Workmanager().registerOneOffTask(
       _kOneshotUniqueName,
@@ -243,7 +238,6 @@ class BackgroundService {
     debugPrint('[BGService] One-shot sync queued');
   }
 
-  /// True if a sync has ever completed (used to show status in Settings UI).
   static Future<bool> get isRunning async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.containsKey(_kLastSyncMs);

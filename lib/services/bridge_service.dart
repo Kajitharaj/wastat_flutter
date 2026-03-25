@@ -1,13 +1,4 @@
 // lib/services/bridge_service.dart
-//
-// WebSocket lifecycle:
-//   App foreground → WebSocket connected (real-time online events)
-//   App background → WebSocket disconnected (WorkManager takes over)
-//
-// This is the key battery fix: the radio is only held open while the
-// user is actually looking at the app. WorkManager's periodic task
-// handles background delivery via HTTP polling.
-
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
@@ -19,7 +10,6 @@ enum BridgeState { disconnected, connecting, connected, error }
 
 enum WhatsAppState { disconnected, qrPending, connected }
 
-// ── Presence event (WS — online/available only) ───────────
 class PresenceEvent {
   final String jid;
   final String phone;
@@ -28,6 +18,13 @@ class PresenceEvent {
   final DateTime? lastSeen;
   final String? contactId;
   final DateTime timestamp;
+
+  // FIX 8: these getters are required by tracker_service to distinguish
+  // composing/recording from genuine offline events. Without them,
+  // _handlePresenceFromBridge cannot guard against transient statuses.
+  bool get isOffline => status == 'unavailable';
+  bool get isComposing => status == 'composing';
+  bool get isRecording => status == 'recording';
 
   PresenceEvent({
     required this.jid,
@@ -52,7 +49,6 @@ class PresenceEvent {
   }
 }
 
-// ── Bridge history models ─────────────────────────────────
 class BridgeHistoryDay {
   final String date;
   final List<BridgeHistoryEvent> events;
@@ -102,8 +98,6 @@ class BridgeService extends ChangeNotifier {
   String? _lastError;
   String _bridgeHost = '';
   String _apiSecret = '';
-
-  // Whether the app is currently in the foreground
   bool _appInForeground = true;
 
   WebSocketChannel? _channel;
@@ -124,17 +118,12 @@ class BridgeService extends ChangeNotifier {
   bool get isConfigured => _bridgeHost.isNotEmpty && _apiSecret.isNotEmpty;
   bool get isFullyConnected => _bridgeState == BridgeState.connected && _waState == WhatsAppState.connected;
 
-  // ── Init ──────────────────────────────────────────────
   Future<void> initialize() async {
     _bridgeHost = await _storage.read(key: _keyBridgeHost) ?? '';
     _apiSecret = await _storage.read(key: _keyApiSecret) ?? '';
     if (isConfigured) await connectWebSocket();
   }
 
-  // ── App lifecycle callbacks ───────────────────────────
-  // Called by the AppLifecycleObserver in main.dart.
-
-  /// App moved to foreground — reconnect WebSocket.
   void onAppForeground() {
     if (_appInForeground) return;
     _appInForeground = true;
@@ -142,16 +131,13 @@ class BridgeService extends ChangeNotifier {
     if (isConfigured) connectWebSocket();
   }
 
-  /// App moved to background — disconnect WebSocket.
-  /// WorkManager takes over with HTTP polling.
   void onAppBackground() {
     if (!_appInForeground) return;
     _appInForeground = false;
-    debugPrint('[Bridge] App background → disconnecting WS (WorkManager takes over)');
+    debugPrint('[Bridge] App background → disconnecting WS');
     _disconnectGracefully();
   }
 
-  // ── Save / clear config ────────────────────────────────
   Future<void> saveConfig({required String bridgeHost, required String apiSecret}) async {
     _bridgeHost = bridgeHost.trim().replaceAll(RegExp(r'/$'), '');
     _apiSecret = apiSecret.trim();
@@ -169,14 +155,8 @@ class BridgeService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── WebSocket connection ───────────────────────────────
   Future<void> connectWebSocket() async {
-    if (_bridgeHost.isEmpty) return;
-    // Don't connect if app is backgrounded — WorkManager handles it
-    if (!_appInForeground) {
-      debugPrint('[Bridge] Skipping WS connect — app is in background');
-      return;
-    }
+    if (_bridgeHost.isEmpty || !_appInForeground) return;
 
     disconnectWebSocket();
     _bridgeState = BridgeState.connecting;
@@ -209,10 +189,9 @@ class BridgeService extends ChangeNotifier {
     _bridgeState = BridgeState.disconnected;
   }
 
-  /// Disconnect without scheduling a reconnect (used on background transition).
   void _disconnectGracefully() {
     _pingTimer?.cancel();
-    _reconnectTimer?.cancel(); // cancel any pending reconnect too
+    _reconnectTimer?.cancel();
     _wsSub?.cancel();
     _channel?.sink.close();
     _channel = null;
@@ -221,7 +200,6 @@ class BridgeService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── WebSocket message handler ──────────────────────────
   void _handleWsMessage(dynamic raw) {
     Map<String, dynamic> msg;
     try {
@@ -238,44 +216,32 @@ class BridgeService extends ChangeNotifier {
         _waState = WhatsAppState.qrPending;
         notifyListeners();
         break;
-
       case 'auth_success':
         _waState = WhatsAppState.connected;
         _connectedPhone = msg['phoneNumber'] as String?;
         _qrCodeBase64 = null;
         notifyListeners();
         break;
-
       case 'auth_logout':
         _waState = WhatsAppState.disconnected;
         _connectedPhone = null;
         notifyListeners();
         break;
-
-      // WS delivers ALL presence events while the app is in the foreground
-      // (available, unavailable, composing, recording…).
-      // Background delivery is handled separately by WorkManager.
       case 'presence':
         try {
           final event = PresenceEvent.fromJson(msg);
-          debugPrint(
-            '[Bridge] Presence event — status: ${event.status}, '
-            'isOnline: ${event.isOnline}, contactId: ${event.contactId}',
-          );
+          debugPrint('[Bridge] Presence — status: ${event.status}, contactId: ${event.contactId}');
           _presenceController.add(event);
         } catch (e) {
           debugPrint('[Bridge] Presence parse error: $e\nMsg: $msg');
         }
         break;
-
       case 'bridge_status':
         _waState = (msg['connected'] as bool? ?? false) ? WhatsAppState.connected : WhatsAppState.disconnected;
         notifyListeners();
         break;
-
       case 'pong':
         break;
-
       case 'error':
         _lastError = msg['message'] as String?;
         notifyListeners();
@@ -288,7 +254,6 @@ class BridgeService extends ChangeNotifier {
     _bridgeState = BridgeState.error;
     _lastError = error.toString();
     notifyListeners();
-    // Only schedule reconnect if app is in foreground
     if (_appInForeground) _scheduleReconnect();
   }
 
@@ -303,7 +268,6 @@ class BridgeService extends ChangeNotifier {
     _reconnectTimer?.cancel();
     final delay = Duration(seconds: (2 << _reconnectAttempts.clamp(0, 6)));
     _reconnectAttempts++;
-    debugPrint('[Bridge] Reconnecting in ${delay.inSeconds}s...');
     _reconnectTimer = Timer(delay, connectWebSocket);
   }
 
@@ -323,16 +287,20 @@ class BridgeService extends ChangeNotifier {
     }
   }
 
-  // ── WS subscribe calls ─────────────────────────────────
   void subscribePresence(String phone, {String? contactId}) {
-    _sendWsMessage({'type': 'subscribe', 'secret': _apiSecret, 'phone': phone, 'contactId': ?contactId});
+    // FIX 6: '?contactId' is invalid Dart. Use a collection-if instead.
+    _sendWsMessage({
+      'type': 'subscribe',
+      'secret': _apiSecret,
+      'phone': phone,
+      if (contactId != null) 'contactId': contactId,
+    });
   }
 
   void unsubscribePresence(String phone) {
     _sendWsMessage({'type': 'unsubscribe', 'secret': _apiSecret, 'phone': phone});
   }
 
-  // ── HTTP REST calls ────────────────────────────────────
   Future<Map<String, dynamic>?> getStatus() => _get('/status');
 
   Future<Map<String, dynamic>?> subscribeBulk(List<Map<String, String>> contacts) =>
@@ -374,9 +342,7 @@ class BridgeService extends ChangeNotifier {
       final res = await http
           .get(Uri.parse('$_bridgeHost$path'), headers: _headers)
           .timeout(const Duration(seconds: 10));
-      if (res.statusCode == 200) {
-        return jsonDecode(res.body) as Map<String, dynamic>;
-      }
+      if (res.statusCode == 200) return jsonDecode(res.body) as Map<String, dynamic>;
     } catch (e) {
       debugPrint('[Bridge] GET $path failed: $e');
     }
@@ -388,9 +354,7 @@ class BridgeService extends ChangeNotifier {
       final res = await http
           .post(Uri.parse('$_bridgeHost$path'), headers: _headers, body: jsonEncode(body))
           .timeout(const Duration(seconds: 10));
-      if (res.statusCode == 200) {
-        return jsonDecode(res.body) as Map<String, dynamic>;
-      }
+      if (res.statusCode == 200) return jsonDecode(res.body) as Map<String, dynamic>;
     } catch (e) {
       debugPrint('[Bridge] POST $path failed: $e');
     }
