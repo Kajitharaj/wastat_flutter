@@ -149,11 +149,14 @@ class TrackerService extends ChangeNotifier {
                 id: 'bridge_${contactId}_${e.ts}',
                 contactId: contactId,
                 status: StatusType.online,
+                exactLastSeen: null,
                 timestamp: timestamp,
               ),
             );
             inserted++;
           } else if (e.isOffline) {
+            // use lastSeen time if it is offline event
+            final exactLastSeen = DateTime.fromMillisecondsSinceEpoch(e.lastSeen ?? e.ts);
             final duration = sessionStart != null ? timestamp.difference(sessionStart).inSeconds : null;
             sessionStart = null;
 
@@ -166,6 +169,7 @@ class TrackerService extends ChangeNotifier {
                 contactId: contactId,
                 status: StatusType.offline,
                 timestamp: timestamp,
+                exactLastSeen: exactLastSeen,
                 durationSeconds: duration,
               ),
             );
@@ -183,7 +187,7 @@ class TrackerService extends ChangeNotifier {
           final latest = await _db.getMostRecentEvent(contact.id);
           if (latest != null && latest.status == StatusType.offline) {
             debugPrint('[Tracker] Reconciling ${contact.name} → offline');
-            await handlePresenceEvent(contact.id, isOnline: false);
+            await handlePresenceEvent(contact.id, isOnline: false, lastSeen: latest.exactLastSeen);
           }
         }
         await loadContacts();
@@ -222,7 +226,7 @@ class TrackerService extends ChangeNotifier {
       return;
     }
 
-    handlePresenceEvent(contact.id, isOnline: event.isOnline);
+    handlePresenceEvent(contact.id, isOnline: event.isOnline, lastSeen: event.lastSeen);
     // composing / recording: skip DB write for now
   }
 
@@ -306,7 +310,7 @@ class TrackerService extends ChangeNotifier {
   }
 
   // ── Core presence handler ─────────────────────────────────
-  Future<void> handlePresenceEvent(String contactId, {required bool isOnline}) async {
+  Future<void> handlePresenceEvent(String contactId, {required bool isOnline, DateTime? lastSeen}) async {
     final idx = _contacts.indexWhere((c) => c.id == contactId);
     if (idx == -1) return;
 
@@ -331,6 +335,7 @@ class TrackerService extends ChangeNotifier {
       contactId: contactId,
       status: isOnline ? StatusType.online : StatusType.offline,
       timestamp: now,
+      exactLastSeen: isOnline ? null : lastSeen,
       durationSeconds: durationSeconds,
     );
     await _db.insertStatusEvent(event);
@@ -342,6 +347,7 @@ class TrackerService extends ChangeNotifier {
       lastSeen: isOnline ? null : now,
       addToSessions: isOnline ? 1 : 0,
       addToMinutes: addMinutes,
+    
     );
 
     _contacts[idx] = contact.copyWith(

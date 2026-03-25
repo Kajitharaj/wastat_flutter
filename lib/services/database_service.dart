@@ -45,6 +45,7 @@ class DatabaseService {
         id              TEXT PRIMARY KEY,
         contactId       TEXT NOT NULL,
         status          TEXT NOT NULL,
+        exactLastSeen   INTEGER,
         timestamp       INTEGER NOT NULL,
         durationSeconds INTEGER,
         FOREIGN KEY (contactId) REFERENCES contacts (id) ON DELETE CASCADE

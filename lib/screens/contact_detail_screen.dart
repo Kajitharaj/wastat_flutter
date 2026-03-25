@@ -520,6 +520,12 @@ class _EventTile extends StatelessWidget {
               ),
             ),
           ),
+          if (event.exactLastSeen != null)
+            Text(
+              event.formattedLastSeenTime,
+              style: const TextStyle(color: Color.fromARGB(255, 29, 156, 235), fontSize: 12),
+            ),
+          const SizedBox(width: 8),
           if (event.durationSeconds != null && event.durationSeconds! > 0)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
