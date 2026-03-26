@@ -31,11 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<TrackedContact> _filterContacts(List<TrackedContact> contacts) {
     if (_searchQuery.isEmpty) return contacts;
     final q = _searchQuery.toLowerCase();
-    return contacts
-        .where((c) =>
-            c.name.toLowerCase().contains(q) ||
-            c.phoneNumber.contains(q))
-        .toList();
+    return contacts.where((c) => c.name.toLowerCase().contains(q) || c.phoneNumber.contains(q)).toList();
   }
 
   @override
@@ -50,13 +46,14 @@ class _HomeScreenState extends State<HomeScreen> {
           backgroundColor: AppTheme.bgPrimary,
           appBar: _buildAppBar(tracker),
           floatingActionButton: _buildFAB(tracker),
-          body: tracker.contacts.isEmpty
-              ? _buildEmptyState()
-              : _buildContactList(
-                  tracker,
-                  onlineContacts,
-                  offlineContacts,
-                ),
+          body: RefreshIndicator(
+            onRefresh: () => _refreshContacts(tracker),
+            color: AppTheme.primaryGreen,
+            backgroundColor: AppTheme.bgSecondary,
+            child: tracker.contacts.isEmpty
+                ? _buildEmptyState()
+                : _buildContactList(tracker, onlineContacts, offlineContacts),
+          ),
         );
       },
     );
@@ -83,10 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Container(
                   width: 32,
                   height: 32,
-                  decoration: BoxDecoration(
-                    color: AppTheme.primaryGreen,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                  decoration: BoxDecoration(color: AppTheme.primaryGreen, borderRadius: BorderRadius.circular(8)),
                   child: const Icon(Icons.wifi_tethering, size: 18, color: Colors.white),
                 ),
                 const SizedBox(width: 10),
@@ -109,16 +103,9 @@ class _HomeScreenState extends State<HomeScreen> {
               margin: const EdgeInsets.only(right: 4),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: tracker.isRunning
-                    ? AppTheme.primaryGreen.withOpacity(0.15)
-                    : AppTheme.bgElevated,
+                color: tracker.isRunning ? AppTheme.primaryGreen.withOpacity(0.15) : AppTheme.bgElevated,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: tracker.isRunning
-                      ? AppTheme.primaryGreen
-                      : AppTheme.textTertiary,
-                  width: 1,
-                ),
+                border: Border.all(color: tracker.isRunning ? AppTheme.primaryGreen : AppTheme.textTertiary, width: 1),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -128,9 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: 7,
                     height: 7,
                     decoration: BoxDecoration(
-                      color: tracker.isRunning
-                          ? AppTheme.primaryGreen
-                          : AppTheme.textTertiary,
+                      color: tracker.isRunning ? AppTheme.primaryGreen : AppTheme.textTertiary,
                       shape: BoxShape.circle,
                     ),
                   ),
@@ -138,9 +123,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   Text(
                     tracker.isRunning ? 'Live' : 'Paused',
                     style: TextStyle(
-                      color: tracker.isRunning
-                          ? AppTheme.primaryGreen
-                          : AppTheme.textSecondary,
+                      color: tracker.isRunning ? AppTheme.primaryGreen : AppTheme.textSecondary,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),
@@ -149,10 +132,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: () => setState(() => _isSearching = true),
-          ),
+          IconButton(icon: const Icon(Icons.search), onPressed: () => setState(() => _isSearching = true)),
         ] else
           IconButton(
             icon: const Icon(Icons.close),
@@ -178,11 +158,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildContactList(
-    TrackerService tracker,
-    List<TrackedContact> online,
-    List<TrackedContact> offline,
-  ) {
+  Widget _buildContactList(TrackerService tracker, List<TrackedContact> online, List<TrackedContact> offline) {
     return CustomScrollView(
       slivers: [
         // Summary bar
@@ -211,11 +187,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
         // Offline section
         if (offline.isNotEmpty) ...[
-          _buildSectionHeader(
-            online.isNotEmpty ? 'Offline' : 'All Contacts',
-            offline.length,
-            AppTheme.offlineColor,
-          ),
+          _buildSectionHeader(online.isNotEmpty ? 'Offline' : 'All Contacts', offline.length, AppTheme.offlineColor),
           SliverList(
             delegate: SliverChildBuilderDelegate(
               (context, i) => ContactCard(
@@ -258,17 +230,10 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(width: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-              decoration: BoxDecoration(
-                color: AppTheme.bgElevated,
-                borderRadius: BorderRadius.circular(10),
-              ),
+              decoration: BoxDecoration(color: AppTheme.bgElevated, borderRadius: BorderRadius.circular(10)),
               child: Text(
                 '$count',
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.w600),
               ),
             ),
           ],
@@ -287,24 +252,13 @@ class _HomeScreenState extends State<HomeScreen> {
             Container(
               width: 100,
               height: 100,
-              decoration: BoxDecoration(
-                color: AppTheme.primaryGreen.withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.people_outline,
-                size: 50,
-                color: AppTheme.primaryGreen,
-              ),
+              decoration: BoxDecoration(color: AppTheme.primaryGreen.withOpacity(0.1), shape: BoxShape.circle),
+              child: const Icon(Icons.people_outline, size: 50, color: AppTheme.primaryGreen),
             ),
             const SizedBox(height: 24),
             const Text(
               'No contacts tracked yet',
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-              ),
+              style: TextStyle(color: AppTheme.textPrimary, fontSize: 20, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 10),
             const Text(
@@ -318,29 +272,23 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _refreshContacts(TrackerService tracker) async {
+    await tracker.syncHistoryFromBridge();
+  }
+
   void _openAddContact(TrackerService tracker) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const AddContactScreen()),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const AddContactScreen()));
   }
 
   void _openDetail(TrackedContact contact) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ContactDetailScreen(contactId: contact.id),
-      ),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (_) => ContactDetailScreen(contactId: contact.id)));
   }
 
   void _showContactOptions(TrackedContact contact, TrackerService tracker) {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppTheme.bgCard,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => _ContactOptionsSheet(
         contact: contact,
         tracker: tracker,
@@ -379,12 +327,9 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () {
               Navigator.pop(ctx);
               tracker.deleteContact(contact.id);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('${contact.name} removed'),
-                  backgroundColor: AppTheme.bgElevated,
-                ),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('${contact.name} removed'), backgroundColor: AppTheme.bgElevated));
             },
             child: const Text('Remove', style: TextStyle(color: Colors.red)),
           ),
@@ -421,10 +366,7 @@ class _ContactOptionsSheet extends StatelessWidget {
             width: 36,
             height: 4,
             margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
-              color: AppTheme.textTertiary,
-              borderRadius: BorderRadius.circular(2),
-            ),
+            decoration: BoxDecoration(color: AppTheme.textTertiary, borderRadius: BorderRadius.circular(2)),
           ),
           // Contact header
           Padding(
@@ -436,38 +378,24 @@ class _ContactOptionsSheet extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(contact.name,
-                        style: const TextStyle(
-                            color: AppTheme.textPrimary,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 16)),
-                    Text(contact.phoneNumber,
-                        style: const TextStyle(
-                            color: AppTheme.textSecondary, fontSize: 13)),
+                    Text(
+                      contact.name,
+                      style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w600, fontSize: 16),
+                    ),
+                    Text(contact.phoneNumber, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
                   ],
                 ),
               ],
             ),
           ),
           const Divider(color: AppTheme.dividerColor),
+          _OptionTile(icon: Icons.analytics_outlined, label: 'View Details & History', onTap: onDetail),
           _OptionTile(
-            icon: Icons.analytics_outlined,
-            label: 'View Details & History',
-            onTap: onDetail,
-          ),
-          _OptionTile(
-            icon: contact.isTracking
-                ? Icons.pause_circle_outline
-                : Icons.play_circle_outline,
+            icon: contact.isTracking ? Icons.pause_circle_outline : Icons.play_circle_outline,
             label: contact.isTracking ? 'Pause Tracking' : 'Resume Tracking',
             onTap: onToggle,
           ),
-          _OptionTile(
-            icon: Icons.delete_outline,
-            label: 'Remove Contact',
-            color: Colors.red,
-            onTap: onDelete,
-          ),
+          _OptionTile(icon: Icons.delete_outline, label: 'Remove Contact', color: Colors.red, onTap: onDelete),
           const SizedBox(height: 8),
         ],
       ),
@@ -481,12 +409,7 @@ class _OptionTile extends StatelessWidget {
   final VoidCallback onTap;
   final Color? color;
 
-  const _OptionTile({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.color,
-  });
+  const _OptionTile({required this.icon, required this.label, required this.onTap, this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -512,11 +435,7 @@ class _ContactAvatar extends StatelessWidget {
       backgroundColor: AppTheme.primaryGreen.withOpacity(0.2),
       child: Text(
         contact.initials,
-        style: TextStyle(
-          color: AppTheme.primaryGreen,
-          fontSize: size * 0.35,
-          fontWeight: FontWeight.w700,
-        ),
+        style: TextStyle(color: AppTheme.primaryGreen, fontSize: size * 0.35, fontWeight: FontWeight.w700),
       ),
     );
   }
