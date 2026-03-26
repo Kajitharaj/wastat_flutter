@@ -116,6 +116,14 @@ class _BackgroundSync {
           );
           inserted++;
 
+          // FIX 13: Also update contact status for online events (not just offline).
+          // This ensures the contact's isCurrentlyOnline flag stays in sync during bg sync.
+          final dbContact = await db.getContact(contact.id);
+          if (dbContact != null && !dbContact.isCurrentlyOnline) {
+            await db.updateContactStatus(contact.id, isOnline: true, addToSessions: 1);
+            debugPrint('[BG] Updated ${contact.name} → online');
+          }
+
           if (ts > lastNotifyMs && ts > lastSyncMs) {
             // FIX 2: show() takes positional args (int id, String? title,
             // String? body, NotificationDetails?). Named params cause a

@@ -165,7 +165,25 @@ class TrackerService extends ChangeNotifier {
         }
       }
 
-      // Update contact statistics for all new events
+      debugPrint('[Tracker] Foreground sync — $inserted new events');
+
+      // FIX 11: Reconcile bidirectionally after syncing history.
+      // If a contact came online while the app was backgrounded, their in-memory
+      // isCurrentlyOnline may be stale (false). Fetch the latest event from DB
+      // and reconcile any state mismatches (both online → offline and offline → online).
+      for (final contact in [..._contacts]) {
+        final latest = await _db.getMostRecentEvent(contact.id);
+        if (latest == null) continue;
+
+        final dbIsOnline = latest.status == StatusType.online;
+        if (contact.isCurrentlyOnline != dbIsOnline) {
+          debugPrint('[Tracker] Reconciling ${contact.name} → ${dbIsOnline ? 'online' : 'offline'}');
+          await handlePresenceEvent(contact.id, isOnline: dbIsOnline, lastSeen: latest.exactLastSeen);
+        }
+      }
+      await loadContacts();
+
+      // Update contact statistics for all new events with CORRECT status after reconciliation
       for (final entry in sessionIncrments.entries) {
         final contactId = entry.key;
         final sessionIncrement = entry.value;
@@ -174,6 +192,7 @@ class TrackerService extends ChangeNotifier {
         if (sessionIncrement > 0 || minuteIncrement > 0) {
           final contact = _contacts.firstWhere((c) => c.id == contactId, orElse: () => TrackedContact.empty());
           if (contact.id.isNotEmpty) {
+            // FIX 14: Use contact's current status after reconciliation, not the stale status
             await _db.updateContactStatus(
               contactId,
               isOnline: contact.isCurrentlyOnline,
@@ -183,20 +202,6 @@ class TrackerService extends ChangeNotifier {
             );
           }
         }
-      }
-
-      debugPrint('[Tracker] Foreground sync — $inserted new events');
-
-      if (inserted > 0) {
-        for (final contact in [..._contacts]) {
-          if (!contact.isCurrentlyOnline) continue;
-          final latest = await _db.getMostRecentEvent(contact.id);
-          if (latest != null && latest.status == StatusType.offline) {
-            debugPrint('[Tracker] Reconciling ${contact.name} → offline');
-            await handlePresenceEvent(contact.id, isOnline: false, lastSeen: latest.exactLastSeen);
-          }
-        }
-        await loadContacts();
       }
     } catch (e, stack) {
       debugPrint('[Tracker] Sync error: $e\n$stack');
